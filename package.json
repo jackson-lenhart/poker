@@ -1,0 +1,18 @@
+{
+  "name": "poker",
+  "version": "1.0.0",
+  "description": "Poker webapp for casual use",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "test": "mocha"
+  },
+  "author": "Jackson Lenhart",
+  "license": "ISC",
+  "dependencies": {
+    "chai": "^4.2.0",
+    "express": "^4.16.4",
+    "uuid": "^3.3.2",
+    "ws": "^6.1.2"
+  }
+}
