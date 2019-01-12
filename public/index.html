@@ -2,10 +2,120 @@
 <html lang="en" dir="ltr">
   <head>
     <meta charset="utf-8">
-    <script src="script.js"></script>
+    <style>
+      html, body {
+        height: 100%;
+        width: 100%;
+      }
+
+      .container {
+        align-items: center;
+        display: flex;
+        justify-content: center;
+        height: 100%;
+      }
+
+      .signin {
+
+      }
+
+      .error-msg {
+        color: red;
+      }
+    </style>
+    <script>
+      // Our main container where we dynamically put html
+      var container;
+      window.onload = function() {
+        container = document.getElementById('container');
+      };
+
+      var ws = new WebSocket('ws://localhost:9090');
+
+      ws.onopen = function() {
+        var username = localStorage.getItem('username');
+
+        if (username) {
+          var gatewayData = { type: 'gateway', username: username };
+          ws.send(JSON.stringify(gatewayData));
+        }
+      };
+
+      ws.onmessage = function(message) {
+        var messageData = JSON.parse(message.data);
+
+        switch(messageData.type) {
+          case 'login':
+            var spinner = document.getElementById('spinner');
+            container.removeChild(spinner);
+
+            var game = document.createElement('div');
+            game.setAttribute('id', 'game');
+            var gameText = 'Signed in as ' + messageData.username + '!';
+            gameText = document.createTextNode(gameText);
+            game.appendChild(gameText);
+            container.appendChild(game);
+
+            localStorage.setItem('username', messageData.username);
+            break;
+
+          // TODO: login failure
+
+          case 'gateway':
+            var loginForm = document.getElementById('login-form');
+            container.removeChild(loginForm);
+
+            var game = document.createElement('div');
+            game.setAttribute('id', 'game');
+            var gameText = 'Signed in as ' + messageData.player.username + '!';
+            gameText = document.createTextNode(gameText);
+            game.appendChild(gameText);
+            container.appendChild(game);
+            break;
+
+          // TODO: gateway failure
+
+          default:
+            console.error('Urecognized message type:', messageData.type);
+        }
+      };
+
+      function login(event) {
+        event.preventDefault();
+
+        var container = document.getElementById('container');
+
+        var usernameInput = document.getElementById('username');
+        var username = usernameInput.value;
+
+        if (username === '') {
+          usernameInput.style.color = 'red';
+          document.getElementById('error-msg').textContent = 'Error: please enter a username';
+          return;
+        }
+
+        var loginForm = document.getElementById('login-form');
+        container.removeChild(loginForm);
+
+        var spinner = document.createElement('div');
+        spinner.setAttribute('id', 'spinner');
+        var spinnerText = document.createTextNode('Loading...');
+        spinner.appendChild(spinnerText);
+        container.appendChild(spinner);
+
+        var loginData = { type: 'login', username: username };
+        ws.send(JSON.stringify(loginData));
+      }
+    </script>
     <title>Poker</title>
   </head>
   <body>
-    <h1>Hello</h1>
+    <div class="container" id="container">
+      <form class="login" id="login-form" onsubmit="login(event)">
+        <label for="username">Username:</label>
+        <input type="text" id="username" name="username" />
+        <span class="error-msg" id="error-msg"></span>
+      </form>
+    </div>
   </body>
 </html>
