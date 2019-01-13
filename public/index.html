@@ -15,17 +15,20 @@
         height: 100%;
       }
 
-      .error-msg {
-        color: red;
+      .pot {
+        /* TODO */
       }
     </style>
     <script>
       /* GLOBALS */
 
       var container;
-      var player = { username: localStorage.getItem('username') };
-      var opponents = [];
+      var username = localStorage.getItem('username');
+      var players = [];
+      var player;
       var hand;
+      var pot = 0;
+      var actionIndex;
 
       /* COMPONENTS */
 
@@ -68,6 +71,12 @@
       var waitingText = document.createTextNode('Waiting for others to join...');
       var readyWaitingText = document.createTextNode('Waiting for others to signify readiness');
 
+      var playerText = document.createTextNode('You');
+
+      // Stack
+      var stack = document.createElement('div');
+      stack.id = 'stack';
+
       window.onload = function() {
         // Our main container where we dynamically inject html
         container = document.getElementById('container');
@@ -77,8 +86,8 @@
       var ws = new WebSocket('ws://localhost:9090');
 
       ws.onopen = function() {
-        if (player.username) {
-          var gatewayData = { type: 'gateway', username: player.username };
+        if (username) {
+          var gatewayData = { type: 'gateway', username: username };
           ws.send(JSON.stringify(gatewayData));
         }
         else {
@@ -92,27 +101,28 @@
 
         switch(messageData.type) {
           case 'login':
+            players = messageData.players;
             player = messageData.player;
-            opponents = messageData.opponents;
             initGame();
-
             localStorage.setItem('username', player.username);
             break;
 
           case 'login-failure':
             alert('Error: ' + messageData.msg);
-
             container.removeChild(spinner);
             container.appendChild(loginForm);
             break;
 
           case 'gateway':
+            players = messageData.players;
             player = messageData.player;
-            opponents = messageData.opponents;
             // This will be null if we're not in hand
             hand = messageData.hand;
+            pot = messageData.pot;
+            actionIndex = messageData.actionIndex;
 
-            if (player.ready) resumeGame();
+            if (hand) resumeHand();
+            else if (player.ready) resumeGame();
             else initGame();
             break;
 
@@ -124,9 +134,9 @@
             break;
 
           case 'join':
-            opponents.push(messageData.playerJoined);
+            players = messageData.players;
             // Render Ready button if we just got our first opponent
-            if (opponents.length === 1) {
+            if (players.length === 2) {
               game.removeChild(waitingText);
               game.appendChild(readyButton);
             }
@@ -134,7 +144,12 @@
 
           case 'hand':
             hand = messageData.hand;
-            renderHand();
+            players = messageData.players;
+            player = messageData.player;
+            pot = messageData.pot;
+            actionIndex = messageData.actionIndex;
+            position = messageData.position;
+            initHand();
             game.removeChild(readyWaitingText);
             break;
 
@@ -164,27 +179,19 @@
         ws.send(JSON.stringify(loginData));
       }
 
-      // If player has just refreshed the page or logged in, this will be called.
+      // If player has just refreshed the page and has not signified readiness,
+      // or if player has just logged in, this will be called.
       function initGame() {
-        var playerText = document.createTextNode('You');
-        var stackText = document.createTextNode(player.stack);
-
         game.appendChild(playerText);
 
         var br = document.createElement('br');
         game.appendChild(br);
 
-        game.appendChild(stackText);
+        stack.textContent = player.stack;
+        game.appendChild(stack);
 
-        var br2 = document.createElement('br');
-        game.appendChild(br2);
-
-        if (opponents.length >= 1) {
-          game.appendChild(readyButton);
-        }
-        else {
-          game.appendChild(waitingText);
-        }
+        if (players.length >= 2) game.appendChild(readyButton);
+        else game.appendChild(waitingText);
 
         container.removeChild(spinner);
         container.appendChild(game);
@@ -200,32 +207,66 @@
 
       // If player has signified readiness/hand is in progress, this will be called.
       function resumeGame() {
-        var playerText = document.createTextNode('You');
-        var stackText = document.createTextNode(player.stack);
-
         game.appendChild(playerText);
 
         var br = document.createElement('br');
         game.appendChild(br);
 
-        game.appendChild(stackText);
+        stack.textContent = player.stack;
+        game.appendChild(stack);
 
-        var br2 = document.createElement('br');
-        game.appendChild(br2);
-
-        if (hand) renderHand();
-        else game.appendChild(waitingText);
+        game.appendChild(waitingText);
 
         container.removeChild(spinner);
         container.appendChild(game);
       }
 
-      function renderHand() {
+      function initHand() {
+        // Render hand
         var handContainer = document.createElement('div');
         var handTextElement = document.createElement('h3');
         handTextElement.textContent = JSON.stringify(hand);
         handContainer.appendChild(handTextElement);
         game.prepend(handContainer);
+
+        // Update stack text
+        stack.textContent = player.stack;
+
+        // Render pot
+        var potContainer = document.createElement('div');
+        potContainer.className = 'pot';
+        var potTextElement = document.createElement('h2');
+        potTextElement.textContent = 'Pot: ' + pot;
+        potContainer.appendChild(potTextElement);
+        game.prepend(potContainer);
+      }
+
+      function resumeHand() {
+        game.appendChild(playerText);
+
+        var br = document.createElement('br');
+        game.appendChild(br);
+
+        stack.textContent = player.stack;
+        game.appendChild(stack);
+
+        // Render hand
+        var handContainer = document.createElement('div');
+        var handTextElement = document.createElement('h3');
+        handTextElement.textContent = JSON.stringify(hand);
+        handContainer.appendChild(handTextElement);
+        game.prepend(handContainer);
+
+        // Render pot
+        var potContainer = document.createElement('div');
+        potContainer.className = 'pot';
+        var potTextElement = document.createElement('h2');
+        potTextElement.textContent = 'Pot: ' + pot;
+        potContainer.appendChild(potTextElement);
+        game.prepend(potContainer);
+
+        container.removeChild(spinner);
+        container.appendChild(game);
       }
     </script>
     <title>Poker</title>

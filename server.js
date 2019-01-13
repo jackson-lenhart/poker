@@ -10,10 +10,16 @@ const wss = new WebSocket.Server({ port: 9090 });
 // Only one table for now with a 10,000 buyin.
 // Will probably use a message queue for this eventually
 // rather than having the server be stateful.
+
+/* GLOBALS */
+
 const players = [];
 const hands = [];
 const buyin = 100000;
 let deck = generateDeck();
+let bigBlindIndex = 0;
+let actionIndex;
+let pot = 0;
 
 app.listen(8080, function() {
   console.log('Listening on port 8080...');
@@ -45,14 +51,13 @@ wss.on('connection', function(ws) {
           const player = { username: messageData.username, stack: buyin, ready: false };
           // A copy of players before adding the new one will be the opponents
           // of the player being added.
-          const opponents = players.slice();
           players.push(player);
           ws.username = player.username;
 
-          const loginData = { type: 'login', player, opponents };
+          const loginData = { type: 'login', player, players };
           ws.send(JSON.stringify(loginData));
 
-          const joinData = { type: 'join', playerJoined: player };
+          const joinData = { type: 'join', players };
           const joinDataSerialized = JSON.stringify(joinData);
 
           // Broadcast to rest of clients that someone joined
@@ -66,17 +71,32 @@ wss.on('connection', function(ws) {
 
       // This is for return visits in the same session (i.e. refresh browser)
       case 'gateway':
-        const player = players.find(p => p.username === messageData.username);
-        if (player) {
-          const opponents = players.filter(p => p.username !== player.username);
-          // Note: The only way of determining whether we are in the middle of
-          // hand right now is whether or not finding the hand returns null.
-          const hand = hands.find(h => h.username === player.username);
+        let playerFound = false;
+        for (let i = 0; i < players.length; i++) {
+          if (players[i].username === messageData.username) {
 
-          const gatewayData = { type: 'gateway', player, opponents, hand: hand.hand };
-          ws.send(JSON.stringify(gatewayData));
+            // Note: The only way of determining whether we are in the middle of
+            // hand right now is whether or not finding the hand returns null.
+            let hand = hands.find(h => h.username === players[i].username);
+            if (hand) hand = hand.hand;
+
+            const gatewayData = {
+              players,
+              actionIndex,
+              pot,
+              hand,
+              player: players[i],
+              position: getPosition(i),
+              type: 'gateway'
+            };
+            ws.send(JSON.stringify(gatewayData));
+
+            playerFound = true;
+            break;
+          }
         }
-        else {
+
+        if (!playerFound) {
           const gatewayFailureData = {
             type: 'gateway-failure',
             msg: `Could not find player with username ${messageData.username}`
@@ -92,18 +112,51 @@ wss.on('connection', function(ws) {
           }
         }
 
-        // If everyone is ready, deal out some hands
+        // If everyone is ready, initialize a pot and deal out some hands
         if (!players.some(p => p.ready === false)) {
-          let player;
+          let smallBlindIndex = bigBlindIndex + 1;
+          if (smallBlindIndex === players.length) {
+            smallBlindIndex = 0;
+          }
+
+          // Post small and big blinds. Blinds hard coded to 50-100 for now (no ante)
+          for (let i = 0; i < players.length; i++) {
+            if (i === bigBlindIndex) {
+              players[i].stack -= 100;
+            }
+            else if (i === smallBlindIndex) {
+              players[i].stack -= 50;
+            }
+          }
+          pot = 150;
+
+          // This is where we emit the 'hand' event to all clients
           let hand;
           wss.clients.forEach(function(client) {
-            player = players.find(p => p.username === client.username);
-            if (player) {
-              // Just playing Texas Hold 'em for now. (Starting with 2 cards)
-              hand = [extractRandomCard(deck), extractRandomCard(deck)];
-              hands.push({ username: player.username, hand });
+            for (let i = 0; i < players.length; i++) {
+              if (players[i].username === client.username) {
 
-              client.send(JSON.stringify({ type: 'hand', hand }));
+                // Just playing Texas Hold 'em for now. (Starting with 2 cards)
+                hand = [extractRandomCard(deck), extractRandomCard(deck)];
+                hands.push({ username: players[i].username, hand });
+
+                // Action will always start out left of the big blind
+                actionIndex = bigBlindIndex - 1;
+                if (actionIndex < 0) {
+                  actionIndex = players.length - 1;
+                }
+
+                client.send(JSON.stringify({
+                  hand,
+                  players,
+                  actionIndex,
+                  pot,
+                  type: 'hand',
+                  player: players[i],
+                  position: getPosition(i)
+                }));
+                break;
+              }
             }
           });
         }
@@ -113,7 +166,15 @@ wss.on('connection', function(ws) {
         console.error('Unrecognized message type:', messageData.type);
     }
   });
-
-  // DEBUG:
-  console.log(players);
 });
+
+// Position is 0 if big blind, 1 if small blind, 2, if dealer,
+// 3 if cutoff, etc. Wraps around the bigBlindIndex
+function getPosition(index) {
+  if (index >= bigBlindIndex) {
+    return index - bigBlindIndex;
+  }
+  else {
+    return players.length - bigBlindIndex + index;
+  }
+}
