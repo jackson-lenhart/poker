@@ -18,17 +18,27 @@
       .pot {
         /* TODO */
       }
+
+      .player-item {
+        padding: 1%;
+      }
+
+      .player-item-has-action {
+        padding: 1%;
+        color: blue;
+      }
     </style>
     <script>
       /* GLOBALS */
 
       var container;
       var username = localStorage.getItem('username');
-      var players = [];
+      var players;
       var player;
       var hand;
-      var pot = 0;
+      var pot;
       var actionIndex;
+      var bets;
 
       /* COMPONENTS */
 
@@ -64,18 +74,92 @@
       var readyButton = document.createElement('button');
       readyButton.type = 'button';
       readyButton.textContent = 'Ready';
-      // TODO
       readyButton.onclick = signifyReadiness;
+
+      // Pot
+      var potContainer = document.createElement('div');
+      potContainer.className = 'pot';
+      var potTextElement = document.createElement('h2');
+      potContainer.appendChild(potTextElement);
+
+      // Stack
+      var stack = document.createElement('div');
+      stack.id = 'stack';
+
+      // Players bar
+      var playersBar = document.createElement('div');
+
+      // Bet text
+      var betText = document.createElement('p');
+
+      // Bet/check form
+      var betForm = document.createElement('form');
+      betForm.onsubmit = bet;
+
+      var betInputLabel = document.createElement('label');
+      betInputLabel.htmlFor = 'bet';
+      betInputLabel.textContent = 'Bet amount:';
+
+      var betInputField = document.createElement('input');
+      betInputField.type = 'text';
+      betInputField.name = 'bet';
+      betInputField.id = 'bet';
+
+      var betButton = document.createElement('button');
+      betButton.type = 'submit';
+      betButton.textContent = 'Bet';
+
+      var checkButton = document.createElement('button');
+      checkButton.type = 'button';
+      checkButton.onclick = check;
+      checkButton.textContent = 'Check';
+
+      betForm.appendChild(betInputLabel);
+      betForm.appendChild(betInputField);
+      betForm.appendChild(betButton);
+      betForm.appendChild(checkButton);
+
+      // Raise/fold form
+      var raiseForm = document.createElement('form');
+      raiseForm.onsubmit = raise;
+
+      var raiseInputLabel = document.createElement('label');
+      raiseInputLabel.htmlFor = 'raise';
+      raiseInputLabel.textContent = 'Raise:';
+
+      var raiseInputField = document.createElement('input');
+      raiseInputField.type = 'text';
+      raiseInputField.name = 'raise';
+      raiseInputField.id = 'raise';
+
+      var raiseButton = document.createElement('button');
+      raiseButton.type = 'submit';
+      raiseButton.textContent = 'Raise';
+
+      var callButton = document.createElement('button');
+      callButton.type = 'button';
+      callButton.onclick = call;
+      callButton.textContent = 'Call';
+
+      var foldButton = document.createElement('button');
+      foldButton.type = 'button';
+      foldButton.onclick = fold;
+      foldButton.textContent = 'Fold';
+
+      raiseForm.appendChild(raiseInputLabel);
+      raiseForm.appendChild(raiseInputField);
+      raiseForm.appendChild(raiseButton);
+      raiseForm.appendChild(callButton);
+      raiseForm.appendChild(foldButton);
+
+      var divider = document.createElement('hr');
+      divider.id = 'divider';
 
       // Waiting text (this probably shouldn't be global but w/e)
       var waitingText = document.createTextNode('Waiting for others to join...');
       var readyWaitingText = document.createTextNode('Waiting for others to signify readiness');
 
       var playerText = document.createTextNode('You');
-
-      // Stack
-      var stack = document.createElement('div');
-      stack.id = 'stack';
 
       window.onload = function() {
         // Our main container where we dynamically inject html
@@ -120,6 +204,7 @@
             hand = messageData.hand;
             pot = messageData.pot;
             actionIndex = messageData.actionIndex;
+            bets = messageData.bets;
 
             if (hand) resumeHand();
             else if (player.ready) resumeGame();
@@ -129,7 +214,6 @@
           case 'gateway-failure':
             container.removeChild(spinner);
             container.appendChild(loginForm);
-
             localStorage.removeItem('username');
             break;
 
@@ -142,6 +226,7 @@
             }
             break;
 
+          // Maybe this should be start-hand?
           case 'hand':
             hand = messageData.hand;
             players = messageData.players;
@@ -149,8 +234,34 @@
             pot = messageData.pot;
             actionIndex = messageData.actionIndex;
             position = messageData.position;
+            bets = messageData.bets;
             initHand();
             game.removeChild(readyWaitingText);
+            break;
+
+          case 'raise':
+            players = messageData.players;
+            pot = messageData.pot;
+            bets = messageData.bets;
+            actionIndex = messageData.actionIndex;
+
+            // Update view
+            stack.textContent = player.stack;
+            potTextElement.textContent = 'Pot: ' + pot;
+            updatePlayersBar();
+
+            // Render bet/check or raise/call/fold input if action is on us
+            if (players[actionIndex].username === player.username) {
+              if (bets.length > 0) {
+                updateBetText();
+
+                game.insertBefore(raiseForm, divider);
+                game.insertBefore(betText, raiseForm);
+              }
+              else {
+                game.prepend(betForm);
+              }
+            }
             break;
 
           default:
@@ -222,6 +333,20 @@
       }
 
       function initHand() {
+        game.prepend(divider);
+
+        // Render bet/check or raise/call/fold input if action is on us
+        if (players[actionIndex].username === player.username) {
+          if (bets.length > 0) {
+            updateBetText();
+            game.prepend(raiseForm);
+            game.prepend(betText);
+          }
+          else {
+            game.prepend(betForm);
+          }
+        }
+
         // Render hand
         var handContainer = document.createElement('div');
         var handTextElement = document.createElement('h3');
@@ -233,15 +358,30 @@
         stack.textContent = player.stack;
 
         // Render pot
-        var potContainer = document.createElement('div');
-        potContainer.className = 'pot';
-        var potTextElement = document.createElement('h2');
         potTextElement.textContent = 'Pot: ' + pot;
-        potContainer.appendChild(potTextElement);
         game.prepend(potContainer);
+
+        updatePlayersBar();
+        game.prepend(playersBar);
       }
 
+      // For page refresh/initial load during hand
       function resumeHand() {
+        // Render bet/check or raise/call/fold input if action is on us
+        if (players[actionIndex].username === player.username) {
+          if (bets.length > 0) {
+            updateBetText();
+            game.appendChild(betText);
+
+            game.appendChild(raiseForm);
+          }
+          else {
+            game.appendChild(betForm);
+          }
+        }
+
+        game.appendChild(divider);
+
         game.appendChild(playerText);
 
         var br = document.createElement('br');
@@ -258,15 +398,107 @@
         game.prepend(handContainer);
 
         // Render pot
-        var potContainer = document.createElement('div');
-        potContainer.className = 'pot';
-        var potTextElement = document.createElement('h2');
         potTextElement.textContent = 'Pot: ' + pot;
-        potContainer.appendChild(potTextElement);
         game.prepend(potContainer);
+
+        updatePlayersBar();
+        game.prepend(playersBar);
 
         container.removeChild(spinner);
         container.appendChild(game);
+      }
+
+      function updatePlayersBar() {
+        // Removing the players bar if its already there.
+        // Might want to optimize this...
+        playersBar.innerHTML = '';
+
+        var playerItem;
+        for (var i = 0; i < players.length; i++) {
+          playerItem = document.createElement('span');
+
+          if (i === actionIndex) playerItem.className = 'player-item-has-action';
+          else playerItem.className = 'player-item';
+
+          if (players[i].username === player.username) {
+            playerItem.textContent = 'You';
+          }
+          else {
+            playerItem.textContent = players[i].username + ': ' + players[i].stack;
+          }
+
+          playersBar.appendChild(playerItem);
+        }
+      }
+
+      function updateBetText() {
+        // Sum up all bets from the latest bettor to get the current bet
+        var latestBet = bets[bets.length - 1];
+        var latestBettor = latestBet.username;
+        var currentBet = latestBet.amount;
+        for (var i = 0; i < bets.length - 1; i++) {
+          if (bets[i].username === latestBettor) {
+            currentBet += bets[i].amount;
+          }
+        }
+
+        // Sum up all bets from player. Difference between 'currentBet' and 'myBet'
+        // is the amount required to call.
+        var myBet = 0;
+        for (var i = 0; i < bets.length - 1; i++) {
+          if (bets[i].username === player.username) {
+            myBet += bets[i].amount;
+          }
+        }
+
+        betText.textContent = 'Bet is ' + currentBet + ', ' + (currentBet - myBet) + ' to call.';
+      }
+
+      function bet(event) {
+        event.preventDefault();
+
+        var amount = document.getElementById('bet').value;
+        // TODO:
+      }
+
+      function check() {
+        // TODO:
+      }
+
+      function raise(event) {
+        event.preventDefault();
+
+        // TODO: validate amount more thoroughly
+        var amount = raiseInputField.value
+        if (amount === '') {
+          alert('Please enter an amount.');
+          return;
+        }
+
+        raiseInputField.value = '';
+        game.removeChild(raiseForm);
+        game.removeChild(betText);
+
+        amount = parseInt(amount, 10);
+
+        if (amount > player.stack) {
+          alert('Please enter an amount less than your stack');
+          return;
+        }
+        player.stack -= amount;
+        pot += amount;
+
+        var raiseData = { type: 'raise', amount: amount, username: player.username };
+
+        ws.send(JSON.stringify(raiseData));
+      }
+
+      function call() {
+        // TODO:
+      }
+
+      function fold() {
+        // TODO:
       }
     </script>
     <title>Poker</title>

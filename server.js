@@ -15,11 +15,15 @@ const wss = new WebSocket.Server({ port: 9090 });
 
 const players = [];
 const hands = [];
-const buyin = 100000;
+const buyin = 10000;
 let deck = generateDeck();
 let bigBlindIndex = 0;
+let smallBlindIndex = 1;
 let actionIndex;
 let pot = 0;
+// 'bets' array will be reset to empty after each round of betting.
+// It is mainly to keep track of bets made before a raise
+let bets = [];
 
 app.listen(8080, function() {
   console.log('Listening on port 8080...');
@@ -85,6 +89,7 @@ wss.on('connection', function(ws) {
               actionIndex,
               pot,
               hand,
+              bets,
               player: players[i],
               position: getPosition(i),
               type: 'gateway'
@@ -114,7 +119,7 @@ wss.on('connection', function(ws) {
 
         // If everyone is ready, initialize a pot and deal out some hands
         if (!players.some(p => p.ready === false)) {
-          let smallBlindIndex = bigBlindIndex + 1;
+          smallBlindIndex = bigBlindIndex + 1;
           if (smallBlindIndex === players.length) {
             smallBlindIndex = 0;
           }
@@ -123,14 +128,18 @@ wss.on('connection', function(ws) {
           for (let i = 0; i < players.length; i++) {
             if (i === bigBlindIndex) {
               players[i].stack -= 100;
+              bets.push({ amount: 100, username: players[i].username });
             }
             else if (i === smallBlindIndex) {
               players[i].stack -= 50;
+              // Unshifting this because the bets need to ordered smallest to greatest
+              bets.unshift({ amount: 50, username: players[i].username });
             }
           }
           pot = 150;
 
-          // This is where we emit the 'hand' event to all clients
+          // This is where we emit the 'hand' event to all clients.
+          // Maybe it should be called 'start-hand'?
           let hand;
           wss.clients.forEach(function(client) {
             for (let i = 0; i < players.length; i++) {
@@ -151,6 +160,7 @@ wss.on('connection', function(ws) {
                   players,
                   actionIndex,
                   pot,
+                  bets,
                   type: 'hand',
                   player: players[i],
                   position: getPosition(i)
@@ -160,6 +170,20 @@ wss.on('connection', function(ws) {
             }
           });
         }
+        break;
+
+      case 'raise':
+        players[actionIndex].stack -= messageData.amount;
+        pot += messageData.amount
+        bets.push({ amount: messageData.amount, username: messageData.username });
+
+        actionIndex++;
+        if (actionIndex === players.length) actionIndex = 0;
+
+        const raiseData = JSON.stringify({ players, pot, bets, actionIndex, type: 'raise' });
+        wss.clients.forEach(function(client) {
+          client.send(raiseData);
+        });
         break;
 
       default:
