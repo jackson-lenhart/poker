@@ -28,6 +28,7 @@
         color: blue;
       }
     </style>
+    <script src="/socket.io/socket.io.js"></script>
     <script>
       /* GLOBALS */
 
@@ -37,8 +38,10 @@
       var player;
       var hand;
       var pot;
+      var board = [];
+      var stage;
       var actionIndex;
-      var bets;
+      var contributions;
 
       /* COMPONENTS */
 
@@ -121,6 +124,7 @@
 
       // Raise/fold form
       var raiseForm = document.createElement('form');
+      raiseForm.id = 'raise-form';
       raiseForm.onsubmit = raise;
 
       var raiseInputLabel = document.createElement('label');
@@ -167,107 +171,129 @@
         container.appendChild(spinner);
       };
 
-      var ws = new WebSocket('ws://localhost:9090');
+      var socket = io();
 
-      ws.onopen = function() {
+      socket.on('connect', function() {
         if (username) {
-          var gatewayData = { type: 'gateway', username: username };
-          ws.send(JSON.stringify(gatewayData));
+          socket.emit('gateway', username);
         }
         else {
           container.removeChild(spinner);
           container.appendChild(loginForm);
         }
-      };
+      });
 
-      ws.onmessage = function(message) {
-        var messageData = JSON.parse(message.data);
+      socket.on('login-success', function(loginData) {
+        player = loginData.player;
+        players = loginData.players;
+        stage = 'lobby';
 
-        switch(messageData.type) {
-          case 'login':
-            players = messageData.players;
-            player = messageData.player;
-            initGame();
-            localStorage.setItem('username', player.username);
-            break;
+        initGame();
 
-          case 'login-failure':
-            alert('Error: ' + messageData.msg);
-            container.removeChild(spinner);
-            container.appendChild(loginForm);
-            break;
+        localStorage.setItem('username', player.username);
+      });
 
-          case 'gateway':
-            players = messageData.players;
-            player = messageData.player;
-            // This will be null if we're not in hand
-            hand = messageData.hand;
-            pot = messageData.pot;
-            actionIndex = messageData.actionIndex;
-            bets = messageData.bets;
+      socket.on('login-failure', function(msg) {
+        alert(msg);
+        container.removeChild(spinner);
+        container.appendChild(loginForm);
+      });
 
-            if (hand) resumeHand();
-            else if (player.ready) resumeGame();
-            else initGame();
-            break;
-
-          case 'gateway-failure':
-            container.removeChild(spinner);
-            container.appendChild(loginForm);
-            localStorage.removeItem('username');
-            break;
-
-          case 'join':
-            players = messageData.players;
-            // Render Ready button if we just got our first opponent
-            if (players.length === 2) {
-              game.removeChild(waitingText);
-              game.appendChild(readyButton);
-            }
-            break;
-
-          // Maybe this should be start-hand?
-          case 'hand':
-            hand = messageData.hand;
-            players = messageData.players;
-            player = messageData.player;
-            pot = messageData.pot;
-            actionIndex = messageData.actionIndex;
-            position = messageData.position;
-            bets = messageData.bets;
-            initHand();
-            game.removeChild(readyWaitingText);
-            break;
-
-          case 'raise':
-            players = messageData.players;
-            pot = messageData.pot;
-            bets = messageData.bets;
-            actionIndex = messageData.actionIndex;
-
-            // Update view
-            stack.textContent = player.stack;
-            potTextElement.textContent = 'Pot: ' + pot;
-            updatePlayersBar();
-
-            // Render bet/check or raise/call/fold input if action is on us
-            if (players[actionIndex].username === player.username) {
-              if (bets.length > 0) {
-                updateBetText();
-
-                game.insertBefore(raiseForm, divider);
-                game.insertBefore(betText, raiseForm);
-              }
-              else {
-                game.prepend(betForm);
-              }
-            }
-            break;
-
-          default:
-            console.error('Unrecognized message type:', messageData.type);
+      socket.on('join', function(_players) {
+        players = _players;
+        // Render Ready button if we just got our first opponent
+        if (players.length === 2) {
+          game.removeChild(waitingText);
+          game.appendChild(readyButton);
         }
-      };
+      });
+
+      socket.on('gateway-success', function(gatewayData) {
+        players = gatewayData.players;
+        player = gatewayData.player;
+        // This will be null if we're not in hand
+        hand = gatewayData.hand;
+        pot = gatewayData.pot;
+        stage = gatewayData.stage;
+        board = gatewayData.board;
+        actionIndex = gatewayData.actionIndex;
+        contributions = gatewayData.contributions;
+
+        if (hand) resumeHand();
+        else if (player.ready) resumeGame();
+        else initGame();
+      });
+
+      socket.on('gateway-failure', function() {
+        container.removeChild(spinner);
+        container.appendChild(loginForm);
+        localStorage.removeItem('username');
+      });
+
+      socket.on('start-hand', function(handData) {
+        hand = handData.hand;
+        players = handData.players;
+        player = handData.player;
+        pot = handData.pot;
+        stage = 'pre-flop';
+        actionIndex = handData.actionIndex;
+        position = handData.position;
+        contributions = handData.contributions;
+
+        initHand();
+        game.removeChild(readyWaitingText);
+      });
+
+      socket.on('raise', function(raiseData) {
+        players = raiseData.players;
+        if (player.username === raiseData.player.username) player = raiseData.player;
+        pot = raiseData.pot;
+        contributions = raiseData.contributions;
+        actionIndex = raiseData.actionIndex;
+
+        // Update view
+        stack.textContent = player.stack;
+        potTextElement.textContent = 'Pot: ' + pot;
+        updatePlayersBar();
+
+        // Render bet/check or raise/call/fold input if action is on us
+        if (players[actionIndex].username === player.username) {
+          if (contributions.length > 0) {
+            updateBetText();
+
+            game.insertBefore(raiseForm, divider);
+            game.insertBefore(betText, raiseForm);
+          }
+          else {
+            game.prepend(betForm);
+          }
+        }
+      });
+
+      socket.on('call', function(callData) {
+        players = callData.players;
+        pot = callData.pot;
+        contributions = callData.contributions;
+        actionIndex = callData.actionIndex;
+
+        // Update view
+        stack.textContent = player.stack;
+        potTextElement.textContent = 'Pot: ' + pot;
+        updatePlayersBar();
+
+        if (callData.stage && callData.stage !== stage) {
+          stage = callData.stage;
+          board = callData.board;
+
+          switch (stage) {
+            case 'flop':
+              flop();
+              break;
+            default:
+              console.error(`Unrecognized stage ${stage}`);
+          }
+        }
+      });
 
       function login(event) {
         event.preventDefault();
@@ -286,8 +312,9 @@
         container.removeChild(loginForm);
         container.appendChild(spinner);
 
-        var loginData = { type: 'login', username: username };
-        ws.send(JSON.stringify(loginData));
+        // var loginData = { type: 'login', username: username };
+        socket.emit('login', username);
+        // ws.send(JSON.stringify(loginData));
       }
 
       // If player has just refreshed the page and has not signified readiness,
@@ -312,8 +339,7 @@
         game.removeChild(readyButton);
         game.appendChild(readyWaitingText);
 
-        var readyData = { type: 'ready', username: player.username };
-        ws.send(JSON.stringify(readyData));
+        socket.emit('ready', player.username);
       }
 
       // If player has signified readiness/hand is in progress, this will be called.
@@ -337,7 +363,7 @@
 
         // Render bet/check or raise/call/fold input if action is on us
         if (players[actionIndex].username === player.username) {
-          if (bets.length > 0) {
+          if (contributions.length > 0) {
             updateBetText();
             game.prepend(raiseForm);
             game.prepend(betText);
@@ -369,7 +395,7 @@
       function resumeHand() {
         // Render bet/check or raise/call/fold input if action is on us
         if (players[actionIndex].username === player.username) {
-          if (bets.length > 0) {
+          if (contributions.length > 0) {
             updateBetText();
             game.appendChild(betText);
 
@@ -400,6 +426,15 @@
         // Render pot
         potTextElement.textContent = 'Pot: ' + pot;
         game.prepend(potContainer);
+
+        if (board.length > 0) {
+          var boardContainer = document.createElement('div');
+          var boardTextElement = document.createElement('h5');
+          boardTextElement.textContent = JSON.stringify(board);
+          boardContainer.appendChild(boardTextElement)
+
+          game.prepend(boardContainer);
+        }
 
         updatePlayersBar();
         game.prepend(playersBar);
@@ -432,26 +467,35 @@
       }
 
       function updateBetText() {
-        // Sum up all bets from the latest bettor to get the current bet
-        var latestBet = bets[bets.length - 1];
-        var latestBettor = latestBet.username;
-        var currentBet = latestBet.amount;
-        for (var i = 0; i < bets.length - 1; i++) {
-          if (bets[i].username === latestBettor) {
-            currentBet += bets[i].amount;
-          }
+        var currentBet = getCurrentBetTotal();
+        // Note: inefficient. Calculating total bet twice
+        var amountToCall = calculateAmountToCall();
+
+        betText.textContent = 'Bet is ' + currentBet + ', ' + amountToCall + ' to call.';
+      }
+
+      function flop() {
+        var boardContainer = document.createElement('div');
+        var boardTextElement = document.createElement('h5');
+        boardTextElement.textContent = JSON.stringify(board);
+        boardContainer.appendChild(boardTextElement)
+
+        game.insertBefore(boardContainer, potContainer);
+
+        if (raiseForm.parentNode === game) {
+          game.removeChild(raiseForm);
         }
 
-        // Sum up all bets from player. Difference between 'currentBet' and 'myBet'
-        // is the amount required to call.
-        var myBet = 0;
-        for (var i = 0; i < bets.length - 1; i++) {
-          if (bets[i].username === player.username) {
-            myBet += bets[i].amount;
-          }
+        if (betText.parentNode === game) {
+          game.removeChild(betText);
         }
 
-        betText.textContent = 'Bet is ' + currentBet + ', ' + (currentBet - myBet) + ' to call.';
+
+        if (players[actionIndex].username === player.username) {
+          game.insertBefore(betForm, divider);
+        }
+
+        updatePlayersBar();
       }
 
       function bet(event) {
@@ -475,30 +519,69 @@
           return;
         }
 
-        raiseInputField.value = '';
-        game.removeChild(raiseForm);
-        game.removeChild(betText);
-
         amount = parseInt(amount, 10);
-
         if (amount > player.stack) {
           alert('Please enter an amount less than your stack');
           return;
         }
+
+        raiseInputField.value = '';
+        game.removeChild(raiseForm);
+        game.removeChild(betText);
+
         player.stack -= amount;
-        pot += amount;
 
-        var raiseData = { type: 'raise', amount: amount, username: player.username };
+        var raiseData = { amount: amount, username: player.username };
 
-        ws.send(JSON.stringify(raiseData));
+        socket.emit('raise', raiseData);
       }
 
       function call() {
-        // TODO:
+        var amountToCall = calculateAmountToCall();
+        player.stack -= amountToCall;
+
+        socket.emit('call', { username: player.username, amountToCall: amountToCall });
       }
 
       function fold() {
         // TODO:
+      }
+
+      function calculateAmountToCall() {
+        // Sum up all bets from the latest bettor to get the current bet
+        var latestContribution = contributions[contributions.length - 1];
+        var latestContributor = latestContribution.username;
+        var currentBet = latestContribution.amount;
+        for (var i = 0; i < contributions.length - 1; i++) {
+          if (contributions[i].username === latestContributor) {
+            currentBet += contributions[i].amount;
+          }
+        }
+
+        // Sum up all bets from player. Difference between 'currentBet' and 'myBet'
+        // is the amount required to call.
+        var myBet = 0;
+        for (var i = 0; i < contributions.length - 1; i++) {
+          if (contributions[i].username === player.username) {
+            myBet += contributions[i].amount;
+          }
+        }
+
+        return currentBet - myBet;
+      }
+
+      function getCurrentBetTotal() {
+        // Sum up all bets from the latest bettor to get the current bet
+        var latestContribution = contributions[contributions.length - 1];
+        var latestContributor = latestContribution.username;
+        var currentBet = latestContribution.amount;
+        for (var i = 0; i < contributions.length - 1; i++) {
+          if (contributions[i].username === latestContributor) {
+            currentBet += contributions[i].amount;
+          }
+        }
+
+        return currentBet;
       }
     </script>
     <title>Poker</title>
