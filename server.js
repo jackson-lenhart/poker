@@ -18,8 +18,8 @@ const players = [];
 const hands = [];
 const buyin = 10000;
 let deck = generateDeck();
-let bigBlindIndex = 0;
-let smallBlindIndex = 1;
+let smallBlindIndex = 0;
+let bigBlindIndex = 1;
 let actionIndex;
 let pot = 0;
 // 'contributions' array will be reset to empty after each round of betting.
@@ -108,9 +108,9 @@ io.on('connection', function(client) {
     if (!players.some(p => p.ready === false)) {
       stageIndex++;
 
-      smallBlindIndex = bigBlindIndex + 1;
-      if (smallBlindIndex === players.length) {
-        smallBlindIndex = 0;
+      smallBlindIndex = bigBlindIndex - 1;
+      if (smallBlindIndex < 0) {
+        smallBlindIndex = players.length - 1;
       }
 
       // Post small and big blinds. Blinds hard coded to 50-100 for now (no ante)
@@ -133,7 +133,6 @@ io.on('connection', function(client) {
       let s;
       for (const k in io.sockets.connected) {
         s = io.sockets.connected[k];
-        console.log('Current socket username:', s.username);
         for (let i = 0; i < players.length; i++) {
           if (players[i].username === s.username) {
 
@@ -142,9 +141,9 @@ io.on('connection', function(client) {
             hands.push({ username: players[i].username, hand });
 
             // Action will always start out left of the big blind
-            actionIndex = bigBlindIndex - 1;
-            if (actionIndex < 0) {
-              actionIndex = players.length - 1;
+            actionIndex = bigBlindIndex + 1;
+            if (actionIndex >= players.length) {
+              actionIndex = 0;
             }
 
             s.emit('start-hand', {
@@ -186,10 +185,11 @@ io.on('connection', function(client) {
     players[actionIndex].stack -= amountToCall;
     pot += amountToCall;
     contributions.push({ username, amount: amountToCall, type: 'call' });
+    const player = players[actionIndex];
 
     incrementActionIndex();
 
-    const callData = { players, pot, contributions };
+    const callData = { players, player, pot, contributions, actionIndex };
 
     let latestBettor;
     for (const c of contributions) {
@@ -209,8 +209,9 @@ io.on('connection', function(client) {
       contributions = [];
       callData.contributions = [];
 
-      actionIndex = bigBlindIndex + 1;
-      if (actionIndex >= players.length) actionIndex = 0;
+      // Action always starts to the 'left' of the button
+      if (players.length === 2) actionIndex = bigBlindIndex;
+      else actionIndex = smallBlindIndex;
 
       if (board.length === 0) {
         for (let i = 0; i < 3; i++) {
