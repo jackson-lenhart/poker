@@ -235,6 +235,26 @@ io.on('connection', function(client) {
 
     io.sockets.emit('call', callData);
   });
+
+  client.on('bet', function({ amount, username }) {
+    players[actionIndex].stack -= amount;
+    pot += amount;
+    contributions.push({ username, amount, type: 'bet' });
+    const player = players[actionIndex];
+
+    incrementActionIndex();
+
+    const betData = {
+      players,
+      player,
+      amount,
+      pot,
+      actionIndex,
+      contributions
+    };
+
+    io.sockets.emit('bet', betData);
+  });
 });
 
 server.listen(8080, function() {

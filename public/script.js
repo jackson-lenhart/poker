@@ -280,6 +280,29 @@
     }
   });
 
+  socket.on('bet', function(betData) {
+    players = betData.players;
+    pot = betData.pot;
+    contributions = betData.contributions;
+    actionIndex = betData.actionIndex;
+
+    // Update view
+    potTextElement.textContent = 'Pot: ' + pot;
+    updatePlayersBar();
+
+    if (betData.player.username === player.username) {
+      player = betData.player;
+      stack.textContent = player.stack;
+    }
+    else {
+      if (players[actionIndex].username === player.username) {
+        updateBetText();
+        game.insertBefore(raiseForm, divider);
+        game.insertBefore(betText, raiseForm);
+      }
+    }
+  });
+
   function login(event) {
     event.preventDefault();
 
@@ -477,8 +500,24 @@
   function bet(event) {
     event.preventDefault();
 
-    var amount = document.getElementById('bet').value;
-    // TODO:
+    // TODO: validate amount more thoroughly
+    var amount = betInputField.value;
+    if (amount === '') {
+      alert('Please enter an amount.');
+      return;
+    }
+
+    amount = parseInt(amount, 10);
+    if (amount > player.stack) {
+      alert('Please enter an amount less than your stack');
+      return;
+    }
+
+    betInputField.value = '';
+    game.removeChild(betForm);
+
+    var betData = { amount: amount, username: player.username };
+    socket.emit('bet', betData);
   }
 
   function check() {
