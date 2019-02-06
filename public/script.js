@@ -64,6 +64,11 @@
   // Players bar
   var playersBar = document.createElement('div');
 
+  // The board
+  var boardContainer = document.createElement('div');
+  var boardTextElement = document.createElement('h5');
+  boardContainer.appendChild(boardTextElement);
+
   // Bet text
   var betText = document.createElement('p');
 
@@ -267,16 +272,54 @@
         case 'flop':
           flop();
           break;
+        case 'turn':
+          turn();
+          break;
+        case 'river':
+          river();
+          break;
         default:
           console.error(`Unrecognized stage ${stage}`);
       }
     }
     else {
       if (players[actionIndex].username === player.username) {
-        updateBetText();
-        game.insertBefore(raiseForm, divider);
-        game.insertBefore(betText, raiseForm);
+        if (callData.bigBlindOption) {
+          game.insertBefore(betForm, divider);
+        }
+        else {
+          updateBetText();
+          game.insertBefore(raiseForm, divider);
+          game.insertBefore(betText, raiseForm);
+        }
       }
+    }
+  });
+
+  socket.on('check', function(checkData) {
+    actionIndex = checkData.actionIndex;
+
+    if (checkData.stage && checkData.stage !== stage) {
+      stage = checkData.stage;
+      board = checkData.board;
+
+      switch (stage) {
+        case 'flop':
+          flop();
+          break;
+        case 'turn':
+          turn();
+          break;
+        case 'river':
+          river();
+          break;
+        default:
+          console.error(`Unrecognized stage ${stage}`);
+      }
+    }
+
+    if (players[actionIndex].username === player.username) {
+      game.insertBefore(betForm, divider);
     }
   });
 
@@ -436,10 +479,7 @@
     game.prepend(potContainer);
 
     if (board.length > 0) {
-      var boardContainer = document.createElement('div');
-      var boardTextElement = document.createElement('h5');
       boardTextElement.textContent = JSON.stringify(board);
-      boardContainer.appendChild(boardTextElement)
 
       game.prepend(boardContainer);
     }
@@ -483,12 +523,28 @@
   }
 
   function flop() {
-    var boardContainer = document.createElement('div');
-    var boardTextElement = document.createElement('h5');
     boardTextElement.textContent = JSON.stringify(board);
-    boardContainer.appendChild(boardTextElement)
-
     game.insertBefore(boardContainer, potContainer);
+
+    if (players[actionIndex].username === player.username) {
+      game.insertBefore(betForm, divider);
+    }
+
+    updatePlayersBar();
+  }
+
+  function turn() {
+    boardTextElement.textContent = JSON.stringify(board);
+
+    if (players[actionIndex].username === player.username) {
+      game.insertBefore(betForm, divider);
+    }
+
+    updatePlayersBar();
+  }
+
+  function river() {
+    boardTextElement.textContent = JSON.stringify(board);
 
     if (players[actionIndex].username === player.username) {
       game.insertBefore(betForm, divider);
@@ -521,7 +577,13 @@
   }
 
   function check() {
-    // TODO:
+    event.preventDefault();
+
+    betInputField.value = '';
+    game.removeChild(betForm);
+
+    var checkData = { username: player.username };
+    socket.emit('check', checkData);
   }
 
   function raise(event) {
