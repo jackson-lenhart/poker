@@ -22,3 +22,8 @@ html, body {
   padding: 1%;
   color: blue;
 }
+
+.player-item-folded {
+  padding: 1%;
+  color: red;
+}

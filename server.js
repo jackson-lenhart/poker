@@ -15,7 +15,7 @@ const io = socketio(server);
 /* GLOBALS */
 
 const players = [];
-const hands = [];
+let hands = [];
 const buyin = 10000;
 let deck = generateDeck();
 let smallBlindIndex = 0;
@@ -26,9 +26,10 @@ let pot = 0;
 // It is mainly to keep track of bets made before a raise
 let contributions = [];
 let board = [];
+let winner;
 
-const stages = ['lobby', 'pre-flop', 'flop', 'turn', 'river', 'showdown'];
-let stageIndex = 0;
+const streets = ['lobby', 'pre-flop', 'flop', 'turn', 'river', 'showdown', 'finished'];
+let streetIndex = 0;
 
 app.use((req, res, next) => {
   res.header('Access-Control-Allow-Origin', '*');
@@ -51,7 +52,7 @@ io.on('connection', function(client) {
       client.emit('login-failure', `User ${username} already exists.`);
     }
     else {
-      const player = { username, stack: buyin, ready: false };
+      const player = { username, stack: buyin, ready: false, folded: false };
       // A copy of players before adding the new one will be the opponents
       // of the player being added.
       players.push(player);
@@ -82,10 +83,12 @@ io.on('connection', function(client) {
           hand,
           contributions,
           board,
-          stage: stages[stageIndex],
+          street: streets[streetIndex],
           player: players[i],
           position: getPosition(i)
         };
+
+        if (streetIndex === 6) gatewayData.winner = winner;
 
         client.emit('gateway-success', gatewayData);
         break;
@@ -106,7 +109,7 @@ io.on('connection', function(client) {
 
     // If everyone is ready, initialize a pot and deal out some hands
     if (!players.some(p => p.ready === false)) {
-      stageIndex++;
+      streetIndex++;
 
       smallBlindIndex = bigBlindIndex - 1;
       if (smallBlindIndex < 0) {
@@ -152,7 +155,7 @@ io.on('connection', function(client) {
               actionIndex,
               pot,
               contributions,
-              stage: stages[stageIndex],
+              streete: streets[streetIndex],
               player: players[i],
               position: getPosition(i)
             });
@@ -189,54 +192,22 @@ io.on('connection', function(client) {
 
     incrementActionIndex();
 
-    const callData = { players, player, pot, contributions, actionIndex };
+    const callData = { players, player, pot, contributions };
 
-    let latestContribution;
-    for (const c of contributions) {
-      if (c.type === 'bet' || c.type === 'raise' || c.type === 'big-blind') {
-        latestContribution = c;
-      }
-    }
+    const lac = getLatestAggressiveContribution();
+    if (lac.type === 'big-blind') {
+      callData.bigBlindOption = true;
+    } else {
+      if (shouldMoveToNextStreet('call', { lac })) {
+        moveToNextStreet();
 
-    // Find out whether action index is same as last bettor?
-    if (players[actionIndex].username === latestContribution.username) {
-      if (latestContribution.type === 'big-blind') {
-        callData.bigBlindOption = true;
-      }
-      else {
-        // In the body of this we are moving to the next 'street'
-
-        // This shouldn't get bigger than or equal to the stages array size
-        // because the 'call' message type should never be received when in
-        // 'showdown' stage.
-        stageIndex++;
-        contributions = [];
         callData.contributions = [];
-
-        // Action always starts to the 'left' of the button
-        if (players.length === 2) actionIndex = bigBlindIndex;
-        else actionIndex = smallBlindIndex;
-
-        if (board.length === 0) {
-          for (let i = 0; i < 3; i++) {
-            board.push(extractRandomCard(deck));
-          }
-        }
-        else if (board.length === 3) {
-          board.push(extractRandomCard(deck));
-        }
-        else if (board.length === 4) {
-          board.push(extractRandomCard(deck));
-        }
-        else if (board.length === 5) {
-          // TODO: Showdown
-        }
-
-        callData.actionIndex = actionIndex;
         callData.board = board;
-        callData.stage = stages[stageIndex];
+        callData.street = streets[streetIndex];
       }
     }
+
+    callData.actionIndex = actionIndex;
 
     io.sockets.emit('call', callData);
   });
@@ -262,49 +233,65 @@ io.on('connection', function(client) {
   });
 
   client.on('check', function({ username }) {
-    const checkData = { username };
     const prevActionIndex = actionIndex;
-
     incrementActionIndex();
 
-    // There is a better way to do this.
-    if (prevActionIndex === bigBlindIndex && stages[stageIndex] === 'pre-flop'
-      // Because small blind acts last post-flop if only 2 players.
-      || prevActionIndex === smallBlindIndex && players.length === 2 && stages[stageIndex] !== 'pre-flop'
-      || actionIndex === smallBlindIndex && players.length !== 2 && stages[stageIndex] !== 'pre-flop') {
+    const checkData = { username };
 
-      // If big blind checks or button checks, we move to next stage.
-      stageIndex++;
-      contributions = [];
-      checkData.stage = stages[stageIndex];
+    if (shouldMoveToNextStreet('check', { prevActionIndex })) {
+      moveToNextStreet();
 
-      // Action always starts to the 'left' of the button
-      if (players.length === 2) actionIndex = bigBlindIndex;
-      else actionIndex = smallBlindIndex;
-
-      if (board.length === 0) {
-        for (let i = 0; i < 3; i++) {
-          board.push(extractRandomCard(deck));
-        }
-      }
-      else if (board.length === 3) {
-        board.push(extractRandomCard(deck));
-      }
-      else if (board.length === 4) {
-        board.push(extractRandomCard(deck));
-      }
-      else if (board.length === 5) {
-        // TODO: Showdown
-      }
-
+      checkData.street = streets[streetIndex];
       checkData.board = board;
-      checkData.actionIndex = actionIndex;
     }
-    else {
-      checkData.actionIndex = actionIndex;
-    }
+
+    // This has to be down here because 'moveToNextStreet()' will often change the actionIndex.
+    checkData.actionIndex = actionIndex;
 
     io.sockets.emit('check', checkData);
+  });
+
+  client.on('fold', function({ username }) {
+    for (const p of players) {
+      if (p.username === username) {
+        p.folded = true;
+      }
+    }
+
+    const foldData = { username };
+
+    let numActivePlayers = 0;
+    for (const p of players) {
+      if (!p.folded) {
+        numActivePlayers++;
+      }
+    }
+
+    if (numActivePlayers === 1) {
+      // If only 1 player remaining the hand is finished.
+      streetIndex = 6;
+
+      for (const p of players) {
+        if (!p.folded) {
+          p.stack += pot;
+          winner = p;
+        }
+      }
+
+      io.sockets.emit('hand-finished', { winner, players });
+    } else {
+      incrementActionIndex();
+
+      const lac = getLatestAggressiveContribution();
+      if (shouldMoveToNextStreet('fold', { lac })) {
+        moveToNextStreet();
+      }
+
+      foldData.actionIndex = actionIndex;
+      foldData.players = players;
+
+      io.sockets.emit('fold', foldData);
+    }
   });
 });
 
@@ -317,8 +304,7 @@ server.listen(8080, function() {
 function getPosition(index) {
   if (index >= bigBlindIndex) {
     return index - bigBlindIndex;
-  }
-  else {
+  } else {
     return players.length - bigBlindIndex + index;
   }
 }
@@ -326,5 +312,86 @@ function getPosition(index) {
 function incrementActionIndex() {
   actionIndex++;
   if (actionIndex === players.length) actionIndex = 0;
+
+  while (players[actionIndex].folded) {
+    actionIndex++;
+    if (actionIndex === players.length) actionIndex = 0;
+  }
+
   return actionIndex;
+}
+
+function shouldMoveToNextStreet(eventType, infoObj) {
+  if (eventType === 'check') {
+    if (streets[streetIndex] === 'pre-flop') {
+      if (infoObj.prevActionIndex === bigBlindIndex) return true;
+      else return false;
+    } else {
+      if (players.length === 2) {
+        // Because small blind acts last post-flop if only 2 players.
+        if (infoObj.prevActionIndex === smallBlindIndex) return true;
+        else return false;
+      } else {
+        if (actionIndex === smallBlindIndex) return true;
+        else return false;
+      }
+    }
+  } else {
+    if (infoObj.lac.username === players[actionIndex].username) return true;
+    else return false;
+  }
+}
+
+function moveToNextStreet() {
+  streetIndex++;
+  contributions = [];
+
+  // Action always starts to the 'left' of the button
+  if (players.length === 2) actionIndex = bigBlindIndex;
+  else actionIndex = smallBlindIndex;
+
+  if (board.length === 0) {
+    for (let i = 0; i < 3; i++) {
+      board.push(extractRandomCard(deck));
+    }
+  }
+  else if (board.length === 3) {
+    board.push(extractRandomCard(deck));
+  }
+  else if (board.length === 4) {
+    board.push(extractRandomCard(deck));
+  }
+  else if (board.length === 5) {
+    // TODO: Showdown
+  }
+}
+
+function getLatestAggressiveContribution() {
+  let contrib;
+  for (const c of contributions) {
+    if (c.type === 'bet' || c.type === 'raise' || c.type === 'big-blind') {
+      contrib = c;
+    }
+  }
+
+  return contrib;
+}
+
+function resetHandState() {
+  pot = 0;
+  contributions = [];
+  board = [];
+  deck = generateDeck();
+  hands = [];
+  streetIndex = 0;
+
+  for (const p of players) {
+    if (p.folded) p.folded = false;
+  }
+
+  bigBlindIndex++;
+  if (bigBlindIndex >= players.length) bigBlindIndex = 0;
+
+  smallBlindIndex++;
+  if (smallBlindIndex >= players.length) smallBlindIndex = 0;
 }

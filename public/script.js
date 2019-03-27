@@ -11,9 +11,10 @@
   var pot;
   var position;
   var board = [];
-  var stage;
+  var street;
   var actionIndex;
   var contributions;
+  var winner;
 
   /* COMPONENTS */
 
@@ -56,6 +57,10 @@
   potContainer.className = 'pot';
   var potTextElement = document.createElement('h2');
   potContainer.appendChild(potTextElement);
+
+  // Hand
+  var handContainer = document.createElement('div');
+  var handTextElement = document.createElement('h3');
 
   // Stack
   var stack = document.createElement('div');
@@ -133,6 +138,8 @@
   raiseForm.appendChild(callButton);
   raiseForm.appendChild(foldButton);
 
+  var handOverDisplay = document.createElement('div');
+
   var divider = document.createElement('hr');
   divider.id = 'divider';
 
@@ -148,13 +155,13 @@
     container.appendChild(spinner);
   };
 
+  // The whole thing relies on socket connection.
   var socket = io();
 
   socket.on('connect', function() {
     if (username) {
       socket.emit('gateway', username);
-    }
-    else {
+    } else {
       container.removeChild(spinner);
       container.appendChild(loginForm);
     }
@@ -163,7 +170,7 @@
   socket.on('login-success', function(loginData) {
     player = loginData.player;
     players = loginData.players;
-    stage = 'lobby';
+    street = 'lobby';
 
     initGame();
 
@@ -191,10 +198,11 @@
     // This will be null if we're not in hand
     hand = gatewayData.hand;
     pot = gatewayData.pot;
-    stage = gatewayData.stage;
+    street = gatewayData.street;
     board = gatewayData.board;
     actionIndex = gatewayData.actionIndex;
     contributions = gatewayData.contributions;
+    if (gatewayData.winner) winner = gatewayData.winner;
 
     if (hand) resumeHand();
     else if (player.ready) resumeGame();
@@ -212,7 +220,7 @@
     players = handData.players;
     player = handData.player;
     pot = handData.pot;
-    stage = 'pre-flop';
+    street = 'pre-flop';
     actionIndex = handData.actionIndex;
     position = handData.position;
     contributions = handData.contributions;
@@ -240,8 +248,7 @@
 
         game.insertBefore(raiseForm, divider);
         game.insertBefore(betText, raiseForm);
-      }
-      else {
+      } else {
         game.prepend(betForm);
       }
     }
@@ -264,11 +271,11 @@
       game.removeChild(betText);
     }
 
-    if (callData.stage && callData.stage !== stage) {
-      stage = callData.stage;
+    if (callData.street && callData.street !== street) {
+      street = callData.street;
       board = callData.board;
 
-      switch (stage) {
+      switch (street) {
         case 'flop':
           flop();
           break;
@@ -279,15 +286,13 @@
           river();
           break;
         default:
-          console.error(`Unrecognized stage ${stage}`);
+          console.error(`Unrecognized street ${street}`);
       }
-    }
-    else {
+    } else {
       if (players[actionIndex].username === player.username) {
         if (callData.bigBlindOption) {
           game.insertBefore(betForm, divider);
-        }
-        else {
+        } else {
           updateBetText();
           game.insertBefore(raiseForm, divider);
           game.insertBefore(betText, raiseForm);
@@ -299,11 +304,11 @@
   socket.on('check', function(checkData) {
     actionIndex = checkData.actionIndex;
 
-    if (checkData.stage && checkData.stage !== stage) {
-      stage = checkData.stage;
+    if (checkData.street && checkData.street !== street) {
+      street = checkData.street;
       board = checkData.board;
 
-      switch (stage) {
+      switch (street) {
         case 'flop':
           flop();
           break;
@@ -314,7 +319,7 @@
           river();
           break;
         default:
-          console.error(`Unrecognized stage ${stage}`);
+          console.error(`Unrecognized street ${street}`);
       }
     }
 
@@ -336,14 +341,46 @@
     if (betData.player.username === player.username) {
       player = betData.player;
       stack.textContent = player.stack;
-    }
-    else {
+    } else {
       if (players[actionIndex].username === player.username) {
         updateBetText();
         game.insertBefore(raiseForm, divider);
         game.insertBefore(betText, raiseForm);
       }
     }
+  });
+
+  socket.on('fold', function(foldData) {
+    players = foldData.players;
+    actionIndex = foldData.actionIndex;
+
+    updatePlayersBar();
+
+    if (players[actionIndex].username === player.username) {
+      updateBetText();
+      game.insertBefore(raiseForm, divider);
+      game.insertBefore(betText, raiseForm);
+    }
+  });
+
+  socket.on('hand-finished', function(finishedData) {
+    players = finishedData.players;
+    winner = finishedData.winner;
+    street = 'finished';
+
+    for (var p of players) {
+      if (p.username === player.username) player = p;
+    }
+    stack.textContent = player.stack;
+
+    var handOverText = document.createTextNode(
+      'Hand finished. ' + winner.username + ' wins ' + pot + '.'
+    );
+    handOverDisplay.appendChild(handOverText);
+
+    game.prepend(handOverDisplay);
+
+    updatePlayersBar();
   });
 
   function login(event) {
@@ -425,8 +462,6 @@
     }
 
     // Render hand
-    var handContainer = document.createElement('div');
-    var handTextElement = document.createElement('h3');
     handTextElement.textContent = JSON.stringify(hand);
     handContainer.appendChild(handTextElement);
     game.prepend(handContainer);
@@ -444,16 +479,25 @@
 
   // For page refresh/initial load during hand
   function resumeHand() {
-    // Render bet/check or raise/call/fold input if action is on us
-    if (players[actionIndex].username === player.username) {
-      if (contributions.length > 0) {
-        updateBetText();
-        game.appendChild(betText);
+    // TODO: clean this up.
+    if (street === 'finished') {
+      var handOverText = document.createTextNode(
+        'Hand finished. ' + winner.username + ' wins ' + pot + '.'
+      );
+      handOverDisplay.appendChild(handOverText);
 
-        game.appendChild(raiseForm);
-      }
-      else {
-        game.appendChild(betForm);
+      game.prepend(handOverDisplay);
+    } else {
+      // Render bet/check or raise/call/fold input if action is on us
+      if (players[actionIndex].username === player.username) {
+        if (contributions.length > 0) {
+          updateBetText();
+          game.appendChild(betText);
+
+          game.appendChild(raiseForm);
+        } else {
+          game.appendChild(betForm);
+        }
       }
     }
 
@@ -467,12 +511,14 @@
     stack.textContent = player.stack;
     game.appendChild(stack);
 
-    // Render hand
-    var handContainer = document.createElement('div');
-    var handTextElement = document.createElement('h3');
-    handTextElement.textContent = JSON.stringify(hand);
-    handContainer.appendChild(handTextElement);
-    game.prepend(handContainer);
+    if (street !== 'finished') {
+      // Render hand
+      var handContainer = document.createElement('div');
+      var handTextElement = document.createElement('h3');
+      handTextElement.textContent = JSON.stringify(hand);
+      handContainer.appendChild(handTextElement);
+      game.prepend(handContainer);
+    }
 
     // Render pot
     potTextElement.textContent = 'Pot: ' + pot;
@@ -500,13 +546,13 @@
     for (var i = 0; i < players.length; i++) {
       playerItem = document.createElement('span');
 
-      if (i === actionIndex) playerItem.className = 'player-item-has-action';
+      if (i === actionIndex && street !== 'finished') playerItem.className = 'player-item-has-action';
+      else if (players[i].folded) playerItem.className = 'player-item-folded';
       else playerItem.className = 'player-item';
 
       if (players[i].username === player.username) {
         playerItem.textContent = 'You';
-      }
-      else {
+      } else {
         playerItem.textContent = players[i].username + ': ' + players[i].stack;
       }
 
@@ -621,7 +667,12 @@
   }
 
   function fold() {
-    // TODO:
+    player.folded = true;
+    game.removeChild(raiseForm);
+    game.removeChild(betText);
+    game.removeChild(handContainer);
+
+    socket.emit('fold', { username: player.username });
   }
 
   function calculateAmountToCall() {
