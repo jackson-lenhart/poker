@@ -12,24 +12,36 @@ const io = socketio(server);
 // Will probably use a message queue for this eventually
 // rather than having the server be stateful.
 
-/* GLOBALS */
+const BUY_IN = 10000;
+// GameState will loop through these statuses as the game progresses.
+const STATUSES = ['LOBBY', 'HAND', 'FINISHED'];
+const STREETS = ['PRE-FLOP', 'FLOP', 'TURN', 'RIVER'];
 
-const players = [];
-let hands = [];
-const buyin = 10000;
-let deck = generateDeck();
-let smallBlindIndex = 0;
-let bigBlindIndex = 1;
-let actionIndex;
-let pot = 0;
-// 'contributions' array will be reset to empty after each round of betting.
-// It is mainly to keep track of bets made before a raise
-let contributions = [];
-let board = [];
-let winner;
+const SMALL_BLIND = 50;
+const BIG_BLIND = 100;
 
-const streets = ['lobby', 'pre-flop', 'flop', 'turn', 'river', 'showdown', 'finished'];
-let streetIndex = 0;
+const InitialState = {
+  players: [],
+  hands: [],
+  deck: generateDeck(),
+  smallBlindIndex: 0,
+  bigBlindIndex: 1,
+  actionIndex: 0,
+  pot: 0,
+  actions: {
+    'PRE-FLOP': [],
+    'FLOP': [],
+    'TURN': [],
+    'RIVER': []
+  },
+  board: [],
+  currentBetTotal: 0,
+  statusIndex: 0,
+  streetIndex: 0,
+  winner: null
+};
+
+let GameState = { ...InitialState };
 
 app.use((req, res, next) => {
   res.header('Access-Control-Allow-Origin', '*');
@@ -47,189 +59,155 @@ app.get('/', function(req, res) {
 });
 
 io.on('connection', function(client) {
-  client.on('login', function(username) {
-    if (players.some(p => p.username === username)) {
-      client.emit('login-failure', `User ${username} already exists.`);
-    }
-    else {
-      const player = { username, stack: buyin, ready: false, folded: false };
-      // A copy of players before adding the new one will be the opponents
-      // of the player being added.
-      players.push(player);
+  client.on('join', function(username) {
+    if (GameState.players.some(p => p.username === username)) {
+      client.emit('join-failure', `User ${username} already exists.`);
+    } else {
+      const player = { username, stack: BUY_IN, ready: false, folded: false };
+      GameState.players.push(player);
       client.username = player.username;
 
-      client.emit('login-success', { player, players });
+      // Doing this just to make it clear that we will have 1 hand per player
+      // and indexes will match.
+      GameState.hands.push(null);
 
-      client.broadcast.emit('join', players);
+      client.emit('join-success', {
+        GameState,
+        username,
+        playerIndex: GameState.players.length - 1
+      });
+
+      client.broadcast.emit('join', GameState);
     }
   });
 
   client.on('gateway', function(username) {
-    let playerFound = false;
-    for (let i = 0; i < players.length; i++) {
-      if (players[i].username === username) {
-        playerFound = true;
+    for (let i = 0; i < GameState.players.length; i++) {
+      if (GameState.players[i].username === username) {
         client.username = username;
 
-        // Note: The only way of determining whether we are in the middle of
-        // hand right now is whether or not finding the hand returns null.
-        let hand = hands.find(h => h.username === players[i].username);
-        if (hand) hand = hand.hand;
-
-        const gatewayData = {
-          players,
-          actionIndex,
-          pot,
-          hand,
-          contributions,
-          board,
-          street: streets[streetIndex],
-          player: players[i],
-          position: getPosition(i)
-        };
-
-        if (streetIndex === 6) gatewayData.winner = winner;
-
-        client.emit('gateway-success', gatewayData);
-        break;
+        client.emit('gateway-success', { GameState, playerIndex: i });
+        return;
       }
     }
 
-    if (!playerFound) {
-      client.emit('gateway-failure');
-    }
+    client.emit('gateway-failure', { msg: `Player with username ${username} not found.` });
   });
 
-  client.on('ready', function(username) {
-    for (const p of players) {
-      if (p.username === username) {
-        p.ready = true;
-      }
-    }
+  client.on('ready', function(playerIndex) {
+    GameState.players[playerIndex].ready = true;
 
     // If everyone is ready, initialize a pot and deal out some hands
-    if (!players.some(p => p.ready === false)) {
-      streetIndex++;
+    if (GameState.players.every(p => p.ready)) {
+      GameState.statusIndex = 1;
 
-      smallBlindIndex = bigBlindIndex - 1;
-      if (smallBlindIndex < 0) {
-        smallBlindIndex = players.length - 1;
+      GameState.smallBlindIndex = GameState.bigBlindIndex - 1;
+      if (GameState.smallBlindIndex < 0) {
+        GameState.smallBlindIndex = GameState.players.length - 1;
       }
 
       // Post small and big blinds. Blinds hard coded to 50-100 for now (no ante)
-      for (let i = 0; i < players.length; i++) {
-        if (i === bigBlindIndex) {
-          players[i].stack -= 100;
-          contributions.push({ amount: 100, username: players[i].username, type: 'big-blind' });
-        }
-        else if (i === smallBlindIndex) {
-          players[i].stack -= 50;
-          // Unshifting this because the bets need to ordered smallest to greatest
-          contributions.unshift({ amount: 50, username: players[i].username, type: 'small-blind' });
-        }
+      GameState.players[GameState.smallBlindIndex].stack -= SMALL_BLIND;
+      GameState.actions['PRE-FLOP'].push({
+        amount: SMALL_BLIND,
+        playerIndex: GameState.smallBlindIndex,
+        type: 'small-blind'
+      });
+
+      GameState.players[GameState.bigBlindIndex].stack -= BIG_BLIND;
+      GameState.actions['PRE-FLOP'].push({
+        amount: BIG_BLIND,
+        playerIndex: GameState.bigBlindIndex,
+        type: 'big-blind'
+      });
+
+      GameState.pot = SMALL_BLIND + BIG_BLIND;
+      GameState.currentBetTotal = BIG_BLIND;
+
+      // Deal out hands.
+      // Just playing Texas Hold 'em for now. (Starting with 2 cards)
+      for (let i = 0; i < GameState.players.length; i++) {
+        GameState.hands[i] = [
+          extractRandomCard(GameState.deck),
+          extractRandomCard(GameState.deck)
+        ];
       }
-      pot = 150;
 
-      // This is where we emit the 'hand' event to all clients.
-      // Maybe it should be called 'start-hand'?
-      let hand;
-      let s;
-      for (const k in io.sockets.connected) {
-        s = io.sockets.connected[k];
-        for (let i = 0; i < players.length; i++) {
-          if (players[i].username === s.username) {
-
-            // Just playing Texas Hold 'em for now. (Starting with 2 cards)
-            hand = [extractRandomCard(deck), extractRandomCard(deck)];
-            hands.push({ username: players[i].username, hand });
-
-            // Action will always start out left of the big blind
-            actionIndex = bigBlindIndex + 1;
-            if (actionIndex >= players.length) {
-              actionIndex = 0;
-            }
-
-            s.emit('start-hand', {
-              hand,
-              players,
-              actionIndex,
-              pot,
-              contributions,
-              streete: streets[streetIndex],
-              player: players[i],
-              position: getPosition(i)
-            });
-            break;
-          }
-        }
+      // Action will always start out left of the big blind
+      GameState.actionIndex = GameState.bigBlindIndex + 1;
+      if (GameState.actionIndex >= GameState.players.length) {
+        GameState.actionIndex = 0;
       }
+
+      io.emit('start-hand', GameState);
     }
   });
 
-  client.on('raise', function({ amount, username }) {
-    players[actionIndex].stack -= amount;
-    pot += amount
-    contributions.push({ amount, username, type: 'raise' });
-
-    incrementActionIndex();
-
-    const raiseData = {
-      players,
-      pot,
-      contributions,
-      actionIndex,
-      player: players[actionIndex]
-    };
-
-    io.sockets.emit('raise', raiseData);
-  });
-
-  client.on('call', function({ username, amountToCall }) {
-    players[actionIndex].stack -= amountToCall;
-    pot += amountToCall;
-    contributions.push({ username, amount: amountToCall, type: 'call' });
-    const player = players[actionIndex];
-
-    incrementActionIndex();
-
-    const callData = { players, player, pot, contributions };
-
-    const lac = getLatestAggressiveContribution();
-    if (lac.type === 'big-blind') {
-      callData.bigBlindOption = true;
-    } else {
-      if (shouldMoveToNextStreet('call', { lac })) {
-        moveToNextStreet();
-
-        callData.contributions = [];
-        callData.board = board;
-        callData.street = streets[streetIndex];
-      }
-    }
-
-    callData.actionIndex = actionIndex;
-
-    io.sockets.emit('call', callData);
-  });
-
-  client.on('bet', function({ amount, username }) {
-    players[actionIndex].stack -= amount;
-    pot += amount;
-    contributions.push({ username, amount, type: 'bet' });
-    const player = players[actionIndex];
-
-    incrementActionIndex();
-
-    const betData = {
-      players,
-      player,
+  client.on('raise', function({ amount, playerIndex }) {
+    GameState.players[playerIndex].stack -= amount;
+    GameState.pot += amount
+    GameState.actions[STREETS[GameState.streetIndex]].push({
       amount,
-      pot,
-      actionIndex,
-      contributions
-    };
+      playerIndex,
+      type: 'raise'
+    });
 
-    io.sockets.emit('bet', betData);
+    incrementActionIndex();
+    GameState.currentBetTotal = getCurrentBetTotal();
+
+    io.emit('raise', GameState);
+  });
+
+  client.on('call', function({ playerIndex, amountToCall }) {
+    GameState.players[playerIndex].stack -= amountToCall;
+    GameState.pot += amountToCall;
+    GameState.actions[STREETS[GameState.streetIndex]].push({
+      playerIndex,
+      amount: amountToCall,
+      type: 'call'
+    });
+
+    incrementActionIndex();
+    const callData = { GameState };
+
+    const la = getLatestAggressiveAction();
+    if (la.type === 'big-blind') {
+      callData.bigBlindOption = true;
+    } else if (shouldMoveToNextStreet('call', { la })) {
+      // If already on river, we see a showdown here.
+      if (GameState.streetIndex === 3) {
+        GameState.statusIndex = 2;
+
+        const winner = calculateWinnerAtShowdown();
+        io.emit('hand-finished', { GameState, winner });
+
+        // Giving 4 seconds to view the winner/amount before going back to lobby.
+        setTimeout(function() {
+          resetHandState();
+          io.emit('reset', GameState);
+        }, 4000);
+        return;
+      }
+
+      moveToNextStreet();
+      callData.shouldMoveToNextStreet = true;
+    }
+
+    io.emit('call', callData);
+  });
+
+  client.on('bet', function({ playerIndex, amount }) {
+    GameState.players[playerIndex].stack -= amount;
+    GameState.pot += amount;
+    GameState.currentBetTotal = amount;
+    GameState.actions[STREETS[GameState.streetIndex]].push({
+      playerIndex,
+      amount,
+      type: 'bet'
+    });
+    incrementActionIndex();
+
+    io.sockets.emit('bet', GameState);
   });
 
   client.on('check', function({ username }) {
@@ -299,99 +277,117 @@ server.listen(8080, function() {
   console.log('Listening on port 8080...');
 });
 
-// Position is 0 if big blind, 1 if small blind, 2, if dealer,
-// 3 if cutoff, etc. Wraps around the bigBlindIndex
-function getPosition(index) {
-  if (index >= bigBlindIndex) {
-    return index - bigBlindIndex;
-  } else {
-    return players.length - bigBlindIndex + index;
-  }
-}
-
 function incrementActionIndex() {
-  actionIndex++;
-  if (actionIndex === players.length) actionIndex = 0;
+  GameState.actionIndex++;
+  if (GameState.actionIndex === GameState.players.length) GameState.actionIndex = 0;
 
-  while (players[actionIndex].folded) {
-    actionIndex++;
-    if (actionIndex === players.length) actionIndex = 0;
+  while (GameState.players[GameState.actionIndex].folded) {
+    GameState.actionIndex++;
+    if (GameState.actionIndex === GameState.players.length) GameState.actionIndex = 0;
   }
-
-  return actionIndex;
 }
 
 function shouldMoveToNextStreet(eventType, infoObj) {
   if (eventType === 'check') {
-    if (streets[streetIndex] === 'pre-flop') {
-      if (infoObj.prevActionIndex === bigBlindIndex) return true;
+    if (STREETS[GameState.streetIndex] === 'PRE-FLOP') {
+      if (infoObj.prevActionIndex === GameState.bigBlindIndex) return true;
       else return false;
     } else {
-      if (players.length === 2) {
+      if (GameState.players.length === 2) {
         // Because small blind acts last post-flop if only 2 players.
-        if (infoObj.prevActionIndex === smallBlindIndex) return true;
+        if (infoObj.prevActionIndex === GameState.smallBlindIndex) return true;
         else return false;
       } else {
-        if (actionIndex === smallBlindIndex) return true;
+        if (GameState.actionIndex === GameState.smallBlindIndex) return true;
         else return false;
       }
     }
   } else {
-    if (infoObj.lac.username === players[actionIndex].username) return true;
+    if (infoObj.la.playerIndex === GameState.actionIndex) return true;
     else return false;
   }
 }
 
 function moveToNextStreet() {
-  streetIndex++;
-  contributions = [];
+  GameState.streetIndex++;
 
   // Action always starts to the 'left' of the button
-  if (players.length === 2) actionIndex = bigBlindIndex;
-  else actionIndex = smallBlindIndex;
+  if (GameState.players.length === 2) {
+    GameState.actionIndex = GameState.bigBlindIndex;
+  } else {
+    GameState.actionIndex = GameState.smallBlindIndex;
+  }
 
-  if (board.length === 0) {
+  if (GameState.board.length === 0) {
     for (let i = 0; i < 3; i++) {
-      board.push(extractRandomCard(deck));
+      GameState.board.push(extractRandomCard(GameState.deck));
     }
-  }
-  else if (board.length === 3) {
-    board.push(extractRandomCard(deck));
-  }
-  else if (board.length === 4) {
-    board.push(extractRandomCard(deck));
-  }
-  else if (board.length === 5) {
-    // TODO: Showdown
+  } else {
+    GameState.board.push(extractRandomCard(GameState.deck));
   }
 }
 
-function getLatestAggressiveContribution() {
-  let contrib;
-  for (const c of contributions) {
-    if (c.type === 'bet' || c.type === 'raise' || c.type === 'big-blind') {
-      contrib = c;
+function getLatestAggressiveAction() {
+  let action;
+  for (const a of GameState.actions[STREETS[GameState.streetIndex]]) {
+    if (a.amount && a.type !== 'call') {
+      action = a;
     }
   }
 
-  return contrib;
+  return action;
 }
 
 function resetHandState() {
-  pot = 0;
-  contributions = [];
-  board = [];
-  deck = generateDeck();
-  hands = [];
-  streetIndex = 0;
+  GameState.hands = [];
+  GameState.pot = 0;
+  GameState.board = [];
+  GameState.deck = generateDeck();
+  GameState.statusIndex = 0;
+  GameState.streetIndex = 0;
+  GameState.winner = null;
+  GameState.currentBetTotal = 0;
 
-  for (const p of players) {
+  // Empty actions object
+  for (const k in GameState.actions) {
+    GameState.actions[k] = [];
+  }
+
+  // Reset all players folded status to false.
+  for (const p of GameState.players) {
     if (p.folded) p.folded = false;
   }
 
-  bigBlindIndex++;
-  if (bigBlindIndex >= players.length) bigBlindIndex = 0;
+  GameState.bigBlindIndex++;
+  if (GameState.bigBlindIndex >= GameState.players.length) {
+    GameState.bigBlindIndex = 0;
+  }
 
-  smallBlindIndex++;
-  if (smallBlindIndex >= players.length) smallBlindIndex = 0;
+  GameState.smallBlindIndex++;
+  if (GameState.smallBlindIndex >= GameState.players.length) {
+    GameState.smallBlindIndex = 0;
+  }
+}
+
+function getCurrentBetTotal() {
+  // Sum up all bets from the latest bettor to get the current bet
+  let latestBettorIndex;
+  for (const a of GameState.actions[STREETS[GameState.streetIndex]]) {
+    if (a.amount) {
+      latestBettorIndex = a.playerIndex
+    }
+  }
+
+  let currentBetTotal = 0;
+  for (const a of GameState.actions[STREETS[GameState.streetIndex]]) {
+    if (a.playerIndex === latestBettorIndex && a.amount) {
+      currentBetTotal += a.amount;
+    }
+  }
+
+  return currentBetTotal;
+}
+
+function calculateWinnerAtShowdown() {
+  /* TODO */
 }

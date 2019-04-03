@@ -3,20 +3,14 @@
 
   /* GLOBALS */
 
-  var container;
   var username = localStorage.getItem('username');
-  var players;
-  var player;
-  var hand;
-  var pot;
-  var position;
-  var board = [];
-  var street;
-  var actionIndex;
-  var contributions;
-  var winner;
+  var GameState;
+  var playerIndex;
+  var STREETS = ['PRE-FLOP', 'FLOP', 'TURN', 'RIVER'];
 
   /* COMPONENTS */
+
+  var container;
 
   // Loading spinner
   var spinner = document.createElement('div');
@@ -24,11 +18,11 @@
   var spinnerText = document.createTextNode('Loading...');
   spinner.appendChild(spinnerText);
 
-  // Login form
-  var loginForm = document.createElement('form');
-  loginForm.id = 'login-form';
-  // login function defined below
-  loginForm.onsubmit = login;
+  // Join form
+  var joinForm = document.createElement('form');
+  joinForm.id = 'join-form';
+  // join function defined below
+  joinForm.onsubmit = join;
 
   var usernameLabel = document.createElement('label');
   usernameLabel.htmlFor = 'username';
@@ -39,8 +33,8 @@
   usernameField.name = 'username';
   usernameField.id = 'username';
 
-  loginForm.appendChild(usernameLabel);
-  loginForm.appendChild(usernameField);
+  joinForm.appendChild(usernameLabel);
+  joinForm.appendChild(usernameField);
 
   // Game
   var game = document.createElement('div');
@@ -163,140 +157,100 @@
       socket.emit('gateway', username);
     } else {
       container.removeChild(spinner);
-      container.appendChild(loginForm);
+      container.appendChild(joinForm);
     }
   });
 
-  socket.on('login-success', function(loginData) {
-    player = loginData.player;
-    players = loginData.players;
-    street = 'lobby';
+  socket.on('join-success', function(joinData) {
+    GameState = joinData.GameState;
+    playerIndex = joinData.playerIndex;
 
     initGame();
 
-    localStorage.setItem('username', player.username);
+    localStorage.setItem('username', GameState.players[playerIndex].username);
   });
 
-  socket.on('login-failure', function(msg) {
+  socket.on('join-failure', function(msg) {
     alert(msg);
     container.removeChild(spinner);
-    container.appendChild(loginForm);
+    container.appendChild(joinForm);
   });
 
-  socket.on('join', function(_players) {
-    players = _players;
+  socket.on('join', function(_GameState) {
+    GameState = _GameState;
     // Render Ready button if we just got our first opponent
-    if (players.length === 2) {
+    if (GameState.players.length === 2) {
       if (waitingText.parentNode === game) game.removeChild(waitingText);
       game.appendChild(readyButton);
     }
   });
 
   socket.on('gateway-success', function(gatewayData) {
-    players = gatewayData.players;
-    player = gatewayData.player;
-    // This will be null if we're not in hand
-    hand = gatewayData.hand;
-    pot = gatewayData.pot;
-    street = gatewayData.street;
-    board = gatewayData.board;
-    actionIndex = gatewayData.actionIndex;
-    contributions = gatewayData.contributions;
-    if (gatewayData.winner) winner = gatewayData.winner;
+    GameState = gatewayData.GameState;
+    playerIndex = gatewayData.playerIndex;
 
-    if (hand) resumeHand();
-    else if (player.ready) resumeGame();
-    else initGame();
+    if (GameState.statusIndex === 0) {
+      if (GameState.players[playerIndex].ready) resumeGame();
+      else initGame();
+    } else if (GameState.statusIndex === 1) {
+      resumeHand();
+    } else if (GameState.statusIndex === 2) {
+      /* TODO */
+    }
   });
 
-  socket.on('gateway-failure', function() {
+  socket.on('gateway-failure', function(gatewayFailureData) {
     container.removeChild(spinner);
-    container.appendChild(loginForm);
+    container.appendChild(joinForm);
     localStorage.removeItem('username');
+
+    console.log('Gateway failure:', gatewayFailureData.msg);
   });
 
-  socket.on('start-hand', function(handData) {
-    hand = handData.hand;
-    players = handData.players;
-    player = handData.player;
-    pot = handData.pot;
-    street = 'pre-flop';
-    actionIndex = handData.actionIndex;
-    position = handData.position;
-    contributions = handData.contributions;
-
+  socket.on('start-hand', function(_GameState) {
+    GameState = _GameState;
     initHand();
+
     game.removeChild(readyWaitingText);
   });
 
-  socket.on('raise', function(raiseData) {
-    players = raiseData.players;
-    if (player.username === raiseData.player.username) player = raiseData.player;
-    pot = raiseData.pot;
-    contributions = raiseData.contributions;
-    actionIndex = raiseData.actionIndex;
+  socket.on('raise', function(_GameState) {
+    GameState = _GameState;
 
     // Update view
-    stack.textContent = player.stack;
-    potTextElement.textContent = 'Pot: ' + pot;
+    stack.textContent = GameState.players[playerIndex].stack;
+    potTextElement.textContent = 'Pot: ' + GameState.pot;
     updatePlayersBar();
 
     // Render bet/check or raise/call/fold input if action is on us
-    if (players[actionIndex].username === player.username) {
-      if (contributions.length > 0) {
-        updateBetText();
-
-        game.insertBefore(raiseForm, divider);
-        game.insertBefore(betText, raiseForm);
-      } else {
-        game.prepend(betForm);
-      }
-    }
+    if (GameState.actionIndex === playerIndex) renderBetOrRaiseForm();
   });
 
   socket.on('call', function(callData) {
-    players = callData.players;
-    pot = callData.pot;
-    contributions = callData.contributions;
-    actionIndex = callData.actionIndex;
+    GameState = callData.GameState;
 
     // Update view
-    potTextElement.textContent = 'Pot: ' + pot;
+    potTextElement.textContent = 'Pot: ' + GameState.pot;
     updatePlayersBar();
+    stack.textContent = GameState.players[playerIndex].stack;
 
-    if (callData.player.username === player.username) {
-      player = callData.player;
-      stack.textContent = player.stack;
-      game.removeChild(raiseForm);
-      game.removeChild(betText);
-    }
+    if (callData.shouldMoveToNextStreet) {
+      boardTextElement.textContent = JSON.stringify(GameState.board);
+      // Optimize
+      game.insertBefore(boardContainer, potContainer);
 
-    if (callData.street && callData.street !== street) {
-      street = callData.street;
-      board = callData.board;
-
-      switch (street) {
-        case 'flop':
-          flop();
-          break;
-        case 'turn':
-          turn();
-          break;
-        case 'river':
-          river();
-          break;
-        default:
-          console.error(`Unrecognized street ${street}`);
+      if (GameState.actionIndex === playerIndex) {
+        game.insertBefore(betForm, divider);
       }
-    } else {
-      if (players[actionIndex].username === player.username) {
-        if (callData.bigBlindOption) {
-          game.insertBefore(betForm, divider);
-        } else {
-          updateBetText();
-          game.insertBefore(raiseForm, divider);
-          game.insertBefore(betText, raiseForm);
-        }
+
+      updatePlayersBar();
+    } else if (GameState.actionIndex === playerIndex) {
+      if (callData.bigBlindOption) {
+        game.insertBefore(betForm, divider);
+      } else {
+        updateBetText();
+        game.insertBefore(raiseForm, divider);
+        game.insertBefore(betText, raiseForm);
       }
     }
   });
@@ -328,25 +282,18 @@
     }
   });
 
-  socket.on('bet', function(betData) {
-    players = betData.players;
-    pot = betData.pot;
-    contributions = betData.contributions;
-    actionIndex = betData.actionIndex;
+  socket.on('bet', function(_GameState) {
+    GameState = _GameState;
 
     // Update view
-    potTextElement.textContent = 'Pot: ' + pot;
+    potTextElement.textContent = 'Pot: ' + GameState.pot;
     updatePlayersBar();
+    stack.textContent = GameState.players[playerIndex].stack;
 
-    if (betData.player.username === player.username) {
-      player = betData.player;
-      stack.textContent = player.stack;
-    } else {
-      if (players[actionIndex].username === player.username) {
-        updateBetText();
-        game.insertBefore(raiseForm, divider);
-        game.insertBefore(betText, raiseForm);
-      }
+    if (GameState.actionIndex === playerIndex) {
+      updateBetText();
+      game.insertBefore(raiseForm, divider);
+      game.insertBefore(betText, raiseForm);
     }
   });
 
@@ -383,7 +330,7 @@
     updatePlayersBar();
   });
 
-  function login(event) {
+  function join(event) {
     event.preventDefault();
 
     var container = document.getElementById('container');
@@ -397,12 +344,10 @@
       return;
     }
 
-    container.removeChild(loginForm);
+    container.removeChild(joinForm);
     container.appendChild(spinner);
 
-    // var loginData = { type: 'login', username: username };
-    socket.emit('login', username);
-    // ws.send(JSON.stringify(loginData));
+    socket.emit('join', username);
   }
 
   // If player has just refreshed the page and has not signified readiness,
@@ -413,10 +358,10 @@
     var br = document.createElement('br');
     game.appendChild(br);
 
-    stack.textContent = player.stack;
+    stack.textContent = GameState.players[playerIndex].stack;
     game.appendChild(stack);
 
-    if (players.length >= 2) game.appendChild(readyButton);
+    if (GameState.players.length >= 2) game.appendChild(readyButton);
     else game.appendChild(waitingText);
 
     container.removeChild(spinner);
@@ -427,7 +372,7 @@
     game.removeChild(readyButton);
     game.appendChild(readyWaitingText);
 
-    socket.emit('ready', player.username);
+    socket.emit('ready', playerIndex);
   }
 
   // If player has signified readiness
@@ -437,7 +382,7 @@
     var br = document.createElement('br');
     game.appendChild(br);
 
-    stack.textContent = player.stack;
+    stack.textContent = GameState.players[playerIndex].stack;
     game.appendChild(stack);
 
     game.appendChild(readyWaitingText);
@@ -446,31 +391,35 @@
     container.appendChild(game);
   }
 
+  function renderBetOrRaiseForm() {
+    if (GameState.actions[STREETS[GameState.streetIndex]].some(x => x.type !== 'CHECK')) {
+      updateBetText();
+
+      game.insertBefore(raiseForm, divider);
+      game.insertBefore(betText, raiseForm);
+    } else {
+      game.prepend(betForm);
+    }
+  }
+
   function initHand() {
     game.prepend(divider);
 
     // Render bet/check or raise/call/fold input if action is on us
-    if (players[actionIndex].username === player.username) {
-      if (contributions.length > 0) {
-        updateBetText();
-        game.prepend(raiseForm);
-        game.prepend(betText);
-      }
-      else {
-        game.prepend(betForm);
-      }
+    if (GameState.actionIndex === playerIndex) {
+      renderBetOrRaiseForm();
     }
 
     // Render hand
-    handTextElement.textContent = JSON.stringify(hand);
+    handTextElement.textContent = JSON.stringify(GameState.hands[playerIndex]);
     handContainer.appendChild(handTextElement);
     game.prepend(handContainer);
 
     // Update stack text
-    stack.textContent = player.stack;
+    stack.textContent = GameState.players[playerIndex].stack;
 
     // Render pot
-    potTextElement.textContent = 'Pot: ' + pot;
+    potTextElement.textContent = 'Pot: ' + GameState.pot;
     game.prepend(potContainer);
 
     updatePlayersBar();
@@ -479,53 +428,32 @@
 
   // For page refresh/initial load during hand
   function resumeHand() {
-    // TODO: clean this up.
-    if (street === 'finished') {
-      var handOverText = document.createTextNode(
-        'Hand finished. ' + winner.username + ' wins ' + pot + '.'
-      );
-      handOverDisplay.appendChild(handOverText);
-
-      game.prepend(handOverDisplay);
-    } else {
-      // Render bet/check or raise/call/fold input if action is on us
-      if (players[actionIndex].username === player.username) {
-        if (contributions.length > 0) {
-          updateBetText();
-          game.appendChild(betText);
-
-          game.appendChild(raiseForm);
-        } else {
-          game.appendChild(betForm);
-        }
-      }
-    }
-
     game.appendChild(divider);
-
     game.appendChild(playerText);
+
+    if (GameState.actionIndex === playerIndex) {
+      renderBetOrRaiseForm();
+    }
 
     var br = document.createElement('br');
     game.appendChild(br);
 
-    stack.textContent = player.stack;
+    stack.textContent = GameState.players[playerIndex].stack;
     game.appendChild(stack);
 
-    if (street !== 'finished') {
-      // Render hand
-      var handContainer = document.createElement('div');
-      var handTextElement = document.createElement('h3');
-      handTextElement.textContent = JSON.stringify(hand);
-      handContainer.appendChild(handTextElement);
-      game.prepend(handContainer);
-    }
+    // Render hand
+    var handContainer = document.createElement('div');
+    var handTextElement = document.createElement('h3');
+    handTextElement.textContent = JSON.stringify(GameState.hands[playerIndex]);
+    handContainer.appendChild(handTextElement);
+    game.prepend(handContainer);
 
     // Render pot
-    potTextElement.textContent = 'Pot: ' + pot;
+    potTextElement.textContent = 'Pot: ' + GameState.pot;
     game.prepend(potContainer);
 
-    if (board.length > 0) {
-      boardTextElement.textContent = JSON.stringify(board);
+    if (GameState.board.length > 0) {
+      boardTextElement.textContent = JSON.stringify(GameState.board);
 
       game.prepend(boardContainer);
     }
@@ -543,17 +471,21 @@
     playersBar.innerHTML = '';
 
     var playerItem;
-    for (var i = 0; i < players.length; i++) {
+    for (var i = 0; i < GameState.players.length; i++) {
       playerItem = document.createElement('span');
 
-      if (i === actionIndex && street !== 'finished') playerItem.className = 'player-item-has-action';
-      else if (players[i].folded) playerItem.className = 'player-item-folded';
-      else playerItem.className = 'player-item';
+      if (i === GameState.actionIndex && GameState.statusIndex !== 2) {
+        playerItem.className = 'player-item-has-action';
+      } else if (GameState.players[i].folded) {
+        playerItem.className = 'player-item-folded';
+      } else {
+        playerItem.className = 'player-item';
+      }
 
-      if (players[i].username === player.username) {
+      if (i === playerIndex) {
         playerItem.textContent = 'You';
       } else {
-        playerItem.textContent = players[i].username + ': ' + players[i].stack;
+        playerItem.textContent = GameState.players[i].username + ': ' + GameState.players[i].stack;
       }
 
       playersBar.appendChild(playerItem);
@@ -561,18 +493,17 @@
   }
 
   function updateBetText() {
-    var currentBet = getCurrentBetTotal();
-    // Note: inefficient. Calculating total bet twice
+    var betTotal = GameState.currentBetTotal;
     var amountToCall = calculateAmountToCall();
 
-    betText.textContent = 'Bet is ' + currentBet + ', ' + amountToCall + ' to call.';
+    betText.textContent = 'Bet is ' + betTotal + ', ' + amountToCall + ' to call.';
   }
 
   function flop() {
-    boardTextElement.textContent = JSON.stringify(board);
+    boardTextElement.textContent = JSON.stringify(GameState.board);
     game.insertBefore(boardContainer, potContainer);
 
-    if (players[actionIndex].username === player.username) {
+    if (GameState.actionIndex === playerIndex) {
       game.insertBefore(betForm, divider);
     }
 
@@ -580,9 +511,9 @@
   }
 
   function turn() {
-    boardTextElement.textContent = JSON.stringify(board);
+    boardTextElement.textContent = JSON.stringify(GameState.board);
 
-    if (players[actionIndex].username === player.username) {
+    if (GameState.actionIndex === playerIndex) {
       game.insertBefore(betForm, divider);
     }
 
@@ -590,9 +521,9 @@
   }
 
   function river() {
-    boardTextElement.textContent = JSON.stringify(board);
+    boardTextElement.textContent = JSON.stringify(GameState.board);
 
-    if (players[actionIndex].username === player.username) {
+    if (GameState.actionIndex === playerIndex) {
       game.insertBefore(betForm, divider);
     }
 
@@ -602,24 +533,21 @@
   function bet(event) {
     event.preventDefault();
 
-    // TODO: validate amount more thoroughly
     var amount = betInputField.value;
     if (amount === '') {
-      alert('Please enter an amount.');
       return;
     }
 
     amount = parseInt(amount, 10);
-    if (amount > player.stack) {
-      alert('Please enter an amount less than your stack');
+    if (typeof amount !== 'number' || amount < 100 // <-- big blind
+      || amount > GameState.players[playerIndex].stack) {
       return;
     }
 
     betInputField.value = '';
     game.removeChild(betForm);
 
-    var betData = { amount: amount, username: player.username };
-    socket.emit('bet', betData);
+    socket.emit('bet', { playerIndex: playerIndex, amount: amount });
   }
 
   function check() {
@@ -638,13 +566,16 @@
     // TODO: validate amount more thoroughly
     var amount = raiseInputField.value
     if (amount === '') {
-      alert('Please enter an amount.');
       return;
     }
 
     amount = parseInt(amount, 10);
-    if (amount > player.stack) {
-      alert('Please enter an amount less than your stack');
+    // This will not catch a particular illegal small blind vs big blind raise yet.
+    if (typeof amount !== 'number' || amount < 100 || amount < calculateAmountToCall() * 2) {
+      return;
+    }
+
+    if (amount > GameState.players[playerIndex].stack) {
       return;
     }
 
@@ -652,18 +583,15 @@
     game.removeChild(raiseForm);
     game.removeChild(betText);
 
-    player.stack -= amount;
-
-    var raiseData = { amount: amount, username: player.username };
-
-    socket.emit('raise', raiseData);
+    socket.emit('raise', { amount: amount, playerIndex: playerIndex });
   }
 
   function call() {
     var amountToCall = calculateAmountToCall();
-    player.stack -= amountToCall;
+    socket.emit('call', { playerIndex: playerIndex, amountToCall: amountToCall });
 
-    socket.emit('call', { username: player.username, amountToCall: amountToCall });
+    game.removeChild(raiseForm);
+    game.removeChild(betText);
   }
 
   function fold() {
@@ -676,39 +604,15 @@
   }
 
   function calculateAmountToCall() {
-    // Sum up all bets from the latest bettor to get the current bet
-    var latestContribution = contributions[contributions.length - 1];
-    var latestContributor = latestContribution.username;
-    var currentBet = latestContribution.amount;
-    for (var i = 0; i < contributions.length - 1; i++) {
-      if (contributions[i].username === latestContributor) {
-        currentBet += contributions[i].amount;
-      }
-    }
-
     // Sum up all bets from player. Difference between 'currentBet' and 'myBet'
     // is the amount required to call.
-    var myBet = 0;
-    for (var i = 0; i < contributions.length - 1; i++) {
-      if (contributions[i].username === player.username) {
-        myBet += contributions[i].amount;
+    var myBetTotal = 0;
+    for (var a of GameState.actions[STREETS[GameState.streetIndex]]) {
+      if (a.playerIndex === playerIndex && a.amount) {
+        myBetTotal += a.amount
       }
     }
 
-    return currentBet - myBet;
-  }
-
-  function getCurrentBetTotal() {
-    // Sum up all bets from the latest bettor to get the current bet
-    var latestContribution = contributions[contributions.length - 1];
-    var latestContributor = latestContribution.username;
-    var currentBet = latestContribution.amount;
-    for (var i = 0; i < contributions.length - 1; i++) {
-      if (contributions[i].username === latestContributor) {
-        currentBet += contributions[i].amount;
-      }
-    }
-
-    return currentBet;
+    return GameState.currentBetTotal - myBetTotal;
   }
 })();
