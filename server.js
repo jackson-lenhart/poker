@@ -20,12 +20,15 @@ const STREETS = ['PRE-FLOP', 'FLOP', 'TURN', 'RIVER'];
 const SMALL_BLIND = 50;
 const BIG_BLIND = 100;
 
+const WAIT_TO_RESET_MS = 4000;
+
 const InitialState = {
   players: [],
   hands: [],
   deck: generateDeck(),
   smallBlindIndex: 0,
   bigBlindIndex: 1,
+  dealerIndex: 0,
   actionIndex: 0,
   pot: 0,
   actions: {
@@ -106,6 +109,15 @@ io.on('connection', function(client) {
         GameState.smallBlindIndex = GameState.players.length - 1;
       }
 
+      if (GameState.players.length === 2) {
+        GameState.dealerIndex = GameState.smallBlindIndex;
+      } else {
+        GameState.dealerIndex = GameState.smallBlindIndex - 1;
+        if (GameState.dealerIndex < 0) {
+          GameState.dealerIndex = GameState.players.length - 1;
+        }
+      }
+
       // Post small and big blinds. Blinds hard coded to 50-100 for now (no ante)
       GameState.players[GameState.smallBlindIndex].stack -= SMALL_BLIND;
       GameState.actions['PRE-FLOP'].push({
@@ -166,34 +178,30 @@ io.on('connection', function(client) {
       amount: amountToCall,
       type: 'call'
     });
-
     incrementActionIndex();
-    const callData = { GameState };
 
     const la = getLatestAggressiveAction();
     if (la.type === 'big-blind') {
-      callData.bigBlindOption = true;
+      io.emit('big-blind-option', GameState);
     } else if (shouldMoveToNextStreet('call', { la })) {
-      // If already on river, we see a showdown here.
       if (GameState.streetIndex === 3) {
         GameState.statusIndex = 2;
+        const winnerIndex = calculateWinnerIndexAtShowdown();
+        GameState.players[winnerIndex].stack += GameState.pot;
+        GameState.winner = GameState.players[winnerIndex];
+        io.emit('hand-finished', GameState);
 
-        const winner = calculateWinnerAtShowdown();
-        io.emit('hand-finished', { GameState, winner });
-
-        // Giving 4 seconds to view the winner/amount before going back to lobby.
         setTimeout(function() {
           resetHandState();
           io.emit('reset', GameState);
-        }, 4000);
-        return;
+        }, WAIT_TO_RESET_MS);
+      } else {
+        moveToNextStreet();
+        io.emit('next-street', GameState);
       }
-
-      moveToNextStreet();
-      callData.shouldMoveToNextStreet = true;
+    } else {
+      io.emit('call', GameState);
     }
-
-    io.emit('call', callData);
   });
 
   client.on('bet', function({ playerIndex, amount }) {
@@ -207,68 +215,87 @@ io.on('connection', function(client) {
     });
     incrementActionIndex();
 
-    io.sockets.emit('bet', GameState);
+    io.emit('bet', GameState);
   });
 
-  client.on('check', function({ username }) {
-    const prevActionIndex = actionIndex;
-    incrementActionIndex();
+  client.on('check', function({ playerIndex }) {
+    GameState.actions[STREETS[GameState.streetIndex]].push({
+      playerIndex,
+      type: 'check'
+    });
 
-    const checkData = { username };
+    if (shouldMoveToNextStreet('check')) {
+      if (GameState.streetIndex === 3) {
+        GameState.statusIndex = 2;
+        const winnerIndex = calculateWinnerIndexAtShowdown();
+        GameState.players[winnerIndex].stack += GameState.pot;
+        GameState.winner = GameState.players[winnerIndex];
+        io.emit('hand-finished', GameState);
 
-    if (shouldMoveToNextStreet('check', { prevActionIndex })) {
-      moveToNextStreet();
-
-      checkData.street = streets[streetIndex];
-      checkData.board = board;
-    }
-
-    // This has to be down here because 'moveToNextStreet()' will often change the actionIndex.
-    checkData.actionIndex = actionIndex;
-
-    io.sockets.emit('check', checkData);
-  });
-
-  client.on('fold', function({ username }) {
-    for (const p of players) {
-      if (p.username === username) {
-        p.folded = true;
+        setTimeout(function() {
+          resetHandState();
+          io.emit('reset', GameState);
+        }, WAIT_TO_RESET_MS);
+      } else {
+        moveToNextStreet();
+        io.emit('next-street', GameState);
       }
+    } else {
+      incrementActionIndex();
+      io.emit('check', GameState);
     }
+  });
 
-    const foldData = { username };
+  client.on('fold', function({ playerIndex }) {
+    GameState.players[playerIndex].folded = true
 
     let numActivePlayers = 0;
-    for (const p of players) {
-      if (!p.folded) {
+    let potentialWinnerIndex;
+    for (let i = 0; i < GameState.players.length; i++) {
+      if (!GameState.players[i].folded) {
+        potentialWinnerIndex = i;
         numActivePlayers++;
       }
     }
 
     if (numActivePlayers === 1) {
       // If only 1 player remaining the hand is finished.
-      streetIndex = 6;
+      GameState.statusIndex = 2;
+      GameState.players[potentialWinnerIndex].stack += GameState.pot;
+      GameState.winner = GameState.players[potentialWinnerIndex];
 
-      for (const p of players) {
-        if (!p.folded) {
-          p.stack += pot;
-          winner = p;
-        }
-      }
+      io.emit('hand-finished', GameState);
 
-      io.sockets.emit('hand-finished', { winner, players });
+      setTimeout(function() {
+        resetHandState();
+        io.emit('reset', GameState);
+      }, WAIT_TO_RESET_MS);
     } else {
       incrementActionIndex();
 
-      const lac = getLatestAggressiveContribution();
-      if (shouldMoveToNextStreet('fold', { lac })) {
-        moveToNextStreet();
+      const la = getLatestAggressiveAction();
+      if (la.type === 'big-blind') {
+        io.emit('big-blind-option', GameState);
+      } else if (shouldMoveToNextStreet('fold', { la })) {
+        if (GameState.streetIndex === 3) {
+          GameState.statusIndex = 2;
+          const winnerIndex = calculateWinnerIndexAtShowdown();
+          GameState.players[winnerIndex].stack += GameState.pot;
+          GameState.winner = GameState.players[winnerIndex];
+
+          io.emit('hand-finished', GameState);
+
+          setTimeout(function() {
+            resetHandState();
+            io.emit('reset', GameState);
+          }, WAIT_TO_RESET_MS);
+        } else {
+          moveToNextStreet();
+          io.emit('next-street', GameState);
+        }
+      } else {
+        io.emit('fold', GameState);
       }
-
-      foldData.actionIndex = actionIndex;
-      foldData.players = players;
-
-      io.sockets.emit('fold', foldData);
     }
   });
 });
@@ -290,17 +317,11 @@ function incrementActionIndex() {
 function shouldMoveToNextStreet(eventType, infoObj) {
   if (eventType === 'check') {
     if (STREETS[GameState.streetIndex] === 'PRE-FLOP') {
-      if (infoObj.prevActionIndex === GameState.bigBlindIndex) return true;
+      if (GameState.actionIndex === GameState.bigBlindIndex) return true;
       else return false;
     } else {
-      if (GameState.players.length === 2) {
-        // Because small blind acts last post-flop if only 2 players.
-        if (infoObj.prevActionIndex === GameState.smallBlindIndex) return true;
-        else return false;
-      } else {
-        if (GameState.actionIndex === GameState.smallBlindIndex) return true;
-        else return false;
-      }
+      if (GameState.actionIndex === GameState.dealerIndex) return true;
+      else return false;
     }
   } else {
     if (infoObj.la.playerIndex === GameState.actionIndex) return true;
@@ -353,19 +374,16 @@ function resetHandState() {
     GameState.actions[k] = [];
   }
 
-  // Reset all players folded status to false.
+  // Reset all players folded and ready status to false
   for (const p of GameState.players) {
     if (p.folded) p.folded = false;
+    if (p.ready) p.ready = false;
   }
 
+  // smallBlindIndex and dealerIndex will revolve around this once when the next hand is initiated.
   GameState.bigBlindIndex++;
   if (GameState.bigBlindIndex >= GameState.players.length) {
     GameState.bigBlindIndex = 0;
-  }
-
-  GameState.smallBlindIndex++;
-  if (GameState.smallBlindIndex >= GameState.players.length) {
-    GameState.smallBlindIndex = 0;
   }
 }
 
@@ -388,6 +406,6 @@ function getCurrentBetTotal() {
   return currentBetTotal;
 }
 
-function calculateWinnerAtShowdown() {
+function calculateWinnerIndexAtShowdown() {
   /* TODO */
 }

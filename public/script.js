@@ -186,6 +186,9 @@
   });
 
   socket.on('gateway-success', function(gatewayData) {
+    // TODO: Fix bug where this does not recognize big blind option on refresh
+    // May involve re-organizing some things and not using the whole 'initGame'/'resumeHand' stuff.
+
     GameState = gatewayData.GameState;
     playerIndex = gatewayData.playerIndex;
 
@@ -226,58 +229,26 @@
     if (GameState.actionIndex === playerIndex) renderBetOrRaiseForm();
   });
 
-  socket.on('call', function(callData) {
-    GameState = callData.GameState;
+  socket.on('call', function(_GameState) {
+    GameState = _GameState;
 
     // Update view
     potTextElement.textContent = 'Pot: ' + GameState.pot;
     updatePlayersBar();
     stack.textContent = GameState.players[playerIndex].stack;
 
-    if (callData.shouldMoveToNextStreet) {
-      boardTextElement.textContent = JSON.stringify(GameState.board);
-      // Optimize
-      game.insertBefore(boardContainer, potContainer);
-
-      if (GameState.actionIndex === playerIndex) {
-        game.insertBefore(betForm, divider);
-      }
-
-      updatePlayersBar();
-    } else if (GameState.actionIndex === playerIndex) {
-      if (callData.bigBlindOption) {
-        game.insertBefore(betForm, divider);
-      } else {
-        updateBetText();
-        game.insertBefore(raiseForm, divider);
-        game.insertBefore(betText, raiseForm);
-      }
+    if (GameState.actionIndex === playerIndex) {
+      updateBetText();
+      game.insertBefore(raiseForm, divider);
+      game.insertBefore(betText, raiseForm);
     }
   });
 
-  socket.on('check', function(checkData) {
-    actionIndex = checkData.actionIndex;
+  socket.on('check', function(_GameState) {
+    GameState = _GameState;
 
-    if (checkData.street && checkData.street !== street) {
-      street = checkData.street;
-      board = checkData.board;
-
-      switch (street) {
-        case 'flop':
-          flop();
-          break;
-        case 'turn':
-          turn();
-          break;
-        case 'river':
-          river();
-          break;
-        default:
-          console.error(`Unrecognized street ${street}`);
-      }
-    }
-
-    if (players[actionIndex].username === player.username) {
+    updatePlayersBar();
+    if (playerIndex === GameState.actionIndex) {
       game.insertBefore(betForm, divider);
     }
   });
@@ -310,24 +281,52 @@
     }
   });
 
-  socket.on('hand-finished', function(finishedData) {
-    players = finishedData.players;
-    winner = finishedData.winner;
-    street = 'finished';
+  socket.on('big-blind-option', function(_GameState) {
+    GameState = _GameState;
 
-    for (var p of players) {
-      if (p.username === player.username) player = p;
+    if (playerIndex === GameState.bigBlindIndex) {
+      game.insertBefore(betForm, divider);
     }
-    stack.textContent = player.stack;
+  })
 
+  socket.on('next-street', function(_GameState) {
+    GameState = _GameState;
+
+    boardTextElement.textContent = JSON.stringify(GameState.board);
+    potTextElement.textContent = 'Pot: ' + GameState.pot;
+    updatePlayersBar();
+    stack.textContent = GameState.players[playerIndex].stack;
+
+    // If it is the flop and we haven't inserted the board into the view yet.
+    if (!game.contains(boardContainer)) {
+      game.insertBefore(boardContainer, potContainer);
+    }
+
+    if (GameState.actionIndex === playerIndex) {
+      game.insertBefore(betForm, divider);
+    }
+  });
+
+  socket.on('hand-finished', function(_GameState) {
+    GameState = _GameState;
+
+    stack.textContent = GameState.players[playerIndex].stack;
     var handOverText = document.createTextNode(
-      'Hand finished. ' + winner.username + ' wins ' + pot + '.'
+      'Hand finished. ' + GameState.winner.username + ' wins ' + GameState.pot + '.'
     );
     handOverDisplay.appendChild(handOverText);
-
     game.prepend(handOverDisplay);
+  });
 
-    updatePlayersBar();
+  socket.on('reset', function(_GameState) {
+    GameState = _GameState;
+
+    handOverDisplay.removeChild(handOverDisplay.firstChild);
+    container.removeChild(game);
+    container.appendChild(spinner);
+    while (game.firstChild) game.removeChild(game.firstChild);
+
+    initGame();
   });
 
   function join(event) {
@@ -392,7 +391,7 @@
   }
 
   function renderBetOrRaiseForm() {
-    if (GameState.actions[STREETS[GameState.streetIndex]].some(x => x.type !== 'CHECK')) {
+    if (GameState.actions[STREETS[GameState.streetIndex]].some(x => x.type !== 'check')) {
       updateBetText();
 
       game.insertBefore(raiseForm, divider);
@@ -499,42 +498,15 @@
     betText.textContent = 'Bet is ' + betTotal + ', ' + amountToCall + ' to call.';
   }
 
-  function flop() {
-    boardTextElement.textContent = JSON.stringify(GameState.board);
-    game.insertBefore(boardContainer, potContainer);
-
-    if (GameState.actionIndex === playerIndex) {
-      game.insertBefore(betForm, divider);
-    }
-
-    updatePlayersBar();
-  }
-
-  function turn() {
-    boardTextElement.textContent = JSON.stringify(GameState.board);
-
-    if (GameState.actionIndex === playerIndex) {
-      game.insertBefore(betForm, divider);
-    }
-
-    updatePlayersBar();
-  }
-
-  function river() {
-    boardTextElement.textContent = JSON.stringify(GameState.board);
-
-    if (GameState.actionIndex === playerIndex) {
-      game.insertBefore(betForm, divider);
-    }
-
-    updatePlayersBar();
-  }
-
   function bet(event) {
     event.preventDefault();
 
     var amount = betInputField.value;
     if (amount === '') {
+      return;
+    }
+
+    if (!(/^\d+$/.test(amount))) {
       return;
     }
 
@@ -556,16 +528,18 @@
     betInputField.value = '';
     game.removeChild(betForm);
 
-    var checkData = { username: player.username };
-    socket.emit('check', checkData);
+    socket.emit('check', { playerIndex: playerIndex });
   }
 
   function raise(event) {
     event.preventDefault();
 
-    // TODO: validate amount more thoroughly
     var amount = raiseInputField.value
     if (amount === '') {
+      return;
+    }
+
+    if (!(/^\d+$/.test(amount))) {
       return;
     }
 
@@ -595,12 +569,11 @@
   }
 
   function fold() {
-    player.folded = true;
     game.removeChild(raiseForm);
     game.removeChild(betText);
     game.removeChild(handContainer);
 
-    socket.emit('fold', { username: player.username });
+    socket.emit('fold', { playerIndex: playerIndex });
   }
 
   function calculateAmountToCall() {
