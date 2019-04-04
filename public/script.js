@@ -268,13 +268,12 @@
     }
   });
 
-  socket.on('fold', function(foldData) {
-    players = foldData.players;
-    actionIndex = foldData.actionIndex;
+  socket.on('fold', function(_GameState) {
+    GameState = _GameState;
 
     updatePlayersBar();
 
-    if (players[actionIndex].username === player.username) {
+    if (playerIndex === GameState.actionIndex) {
       updateBetText();
       game.insertBefore(raiseForm, divider);
       game.insertBefore(betText, raiseForm);
@@ -467,7 +466,7 @@
   function updatePlayersBar() {
     // Removing the players bar if its already there.
     // Might want to optimize this...
-    playersBar.innerHTML = '';
+    while (playersBar.firstChild) playersBar.removeChild(playersBar.firstChild);
 
     var playerItem;
     for (var i = 0; i < GameState.players.length; i++) {

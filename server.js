@@ -274,7 +274,7 @@ io.on('connection', function(client) {
       incrementActionIndex();
 
       const la = getLatestAggressiveAction();
-      if (la.type === 'big-blind') {
+      if (GameState.actionIndex === GameState.bigBlindIndex && la.type === 'big-blind') {
         io.emit('big-blind-option', GameState);
       } else if (shouldMoveToNextStreet('fold', { la })) {
         if (GameState.streetIndex === 3) {
@@ -337,6 +337,11 @@ function moveToNextStreet() {
     GameState.actionIndex = GameState.bigBlindIndex;
   } else {
     GameState.actionIndex = GameState.smallBlindIndex;
+  }
+
+  while (GameState.players[GameState.actionIndex].folded) {
+    GameState.actionIndex++;
+    if (GameState.actionIndex === GameState.players.length) GameState.actionIndex = 0;
   }
 
   if (GameState.board.length === 0) {
