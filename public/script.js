@@ -186,19 +186,100 @@
   });
 
   socket.on('gateway-success', function(gatewayData) {
-    // TODO: Fix bug where this does not recognize big blind option on refresh
-    // May involve re-organizing some things and not using the whole 'initGame'/'resumeHand' stuff.
-
     GameState = gatewayData.GameState;
     playerIndex = gatewayData.playerIndex;
 
     if (GameState.statusIndex === 0) {
-      if (GameState.players[playerIndex].ready) resumeGame();
-      else initGame();
+      if (GameState.players[playerIndex].ready) {
+        game.appendChild(playerText);
+
+        var br = document.createElement('br');
+        game.appendChild(br);
+
+        stack.textContent = GameState.players[playerIndex].stack;
+        game.appendChild(stack);
+
+        game.appendChild(readyWaitingText);
+
+        container.removeChild(spinner);
+        container.appendChild(game);
+      } else {
+        initGame();
+      }
     } else if (GameState.statusIndex === 1) {
-      resumeHand();
+      // We are in a hand.
+      game.appendChild(divider);
+      game.appendChild(playerText);
+
+      if (GameState.actionIndex === playerIndex) {
+        renderBetOrRaiseForm();
+      }
+
+      var br = document.createElement('br');
+      game.appendChild(br);
+
+      stack.textContent = GameState.players[playerIndex].stack;
+      game.appendChild(stack);
+
+      // Render hand
+      var handContainer = document.createElement('div');
+      var handTextElement = document.createElement('h3');
+      handTextElement.textContent = JSON.stringify(GameState.hands[playerIndex]);
+      handContainer.appendChild(handTextElement);
+      game.prepend(handContainer);
+
+      // Render pot
+      potTextElement.textContent = 'Pot: ' + GameState.pot;
+      game.prepend(potContainer);
+
+      if (GameState.board.length > 0) {
+        boardTextElement.textContent = JSON.stringify(GameState.board);
+
+        game.prepend(boardContainer);
+      }
+
+      updatePlayersBar();
+      game.prepend(playersBar);
+
+      container.removeChild(spinner);
+      container.appendChild(game);
     } else if (GameState.statusIndex === 2) {
-      /* TODO */
+      // We are in the 'finished' stage (within 4 seconds of someone winning a hand).
+      game.appendChild(divider);
+      game.appendChild(playerText);
+
+      var br = document.createElement('br');
+      game.appendChild(br);
+
+      stack.textContent = GameState.players[playerIndex].stack;
+      game.appendChild(stack);
+
+      // Render hand
+      var handContainer = document.createElement('div');
+      var handTextElement = document.createElement('h3');
+      handTextElement.textContent = JSON.stringify(GameState.hands[playerIndex]);
+      handContainer.appendChild(handTextElement);
+      game.prepend(handContainer);
+
+      // Render pot
+      potTextElement.textContent = 'Pot: ' + GameState.pot;
+      game.prepend(potContainer);
+
+      boardTextElement.textContent = JSON.stringify(GameState.board);
+
+      game.prepend(boardContainer);
+
+      updatePlayersBar();
+      game.prepend(playersBar);
+
+      var handOverText = document.createTextNode(
+        'Hand finished. ' + GameState.winner.username + ' wins ' + GameState.pot + '.'
+      );
+      handOverDisplay.appendChild(handOverText);
+      game.prepend(handOverDisplay);
+
+      container.removeChild(spinner);
+      container.appendChild(game);
     }
   });
 
@@ -212,7 +293,28 @@
 
   socket.on('start-hand', function(_GameState) {
     GameState = _GameState;
-    initHand();
+
+    game.prepend(divider);
+
+    // Render bet/check or raise/call/fold input if action is on us
+    if (GameState.actionIndex === playerIndex) {
+      renderBetOrRaiseForm();
+    }
+
+    // Render hand
+    handTextElement.textContent = JSON.stringify(GameState.hands[playerIndex]);
+    handContainer.appendChild(handTextElement);
+    game.prepend(handContainer);
+
+    // Update stack text
+    stack.textContent = GameState.players[playerIndex].stack;
+
+    // Render pot
+    potTextElement.textContent = 'Pot: ' + GameState.pot;
+    game.prepend(potContainer);
+
+    updatePlayersBar();
+    game.prepend(playersBar);
 
     game.removeChild(readyWaitingText);
   });
@@ -373,94 +475,22 @@
     socket.emit('ready', playerIndex);
   }
 
-  // If player has signified readiness
-  function resumeGame() {
-    game.appendChild(playerText);
-
-    var br = document.createElement('br');
-    game.appendChild(br);
-
-    stack.textContent = GameState.players[playerIndex].stack;
-    game.appendChild(stack);
-
-    game.appendChild(readyWaitingText);
-
-    container.removeChild(spinner);
-    container.appendChild(game);
-  }
-
   function renderBetOrRaiseForm() {
-    if (GameState.actions[STREETS[GameState.streetIndex]].some(x => x.type !== 'check')) {
+    if (GameState.actions[STREETS[GameState.streetIndex]].every(a => a.type === 'check')
+      || isBigBlindOption()
+    ) {
+      game.prepend(betForm);
+    } else {
       updateBetText();
-
       game.insertBefore(raiseForm, divider);
       game.insertBefore(betText, raiseForm);
-    } else {
-      game.prepend(betForm);
     }
   }
 
-  function initHand() {
-    game.prepend(divider);
-
-    // Render bet/check or raise/call/fold input if action is on us
-    if (GameState.actionIndex === playerIndex) {
-      renderBetOrRaiseForm();
-    }
-
-    // Render hand
-    handTextElement.textContent = JSON.stringify(GameState.hands[playerIndex]);
-    handContainer.appendChild(handTextElement);
-    game.prepend(handContainer);
-
-    // Update stack text
-    stack.textContent = GameState.players[playerIndex].stack;
-
-    // Render pot
-    potTextElement.textContent = 'Pot: ' + GameState.pot;
-    game.prepend(potContainer);
-
-    updatePlayersBar();
-    game.prepend(playersBar);
-  }
-
-  // For page refresh/initial load during hand
-  function resumeHand() {
-    game.appendChild(divider);
-    game.appendChild(playerText);
-
-    if (GameState.actionIndex === playerIndex) {
-      renderBetOrRaiseForm();
-    }
-
-    var br = document.createElement('br');
-    game.appendChild(br);
-
-    stack.textContent = GameState.players[playerIndex].stack;
-    game.appendChild(stack);
-
-    // Render hand
-    var handContainer = document.createElement('div');
-    var handTextElement = document.createElement('h3');
-    handTextElement.textContent = JSON.stringify(GameState.hands[playerIndex]);
-    handContainer.appendChild(handTextElement);
-    game.prepend(handContainer);
-
-    // Render pot
-    potTextElement.textContent = 'Pot: ' + GameState.pot;
-    game.prepend(potContainer);
-
-    if (GameState.board.length > 0) {
-      boardTextElement.textContent = JSON.stringify(GameState.board);
-
-      game.prepend(boardContainer);
-    }
-
-    updatePlayersBar();
-    game.prepend(playersBar);
-
-    container.removeChild(spinner);
-    container.appendChild(game);
+  function isBigBlindOption() {
+    return GameState.streetIndex === 0
+      && playerIndex === GameState.bigBlindIndex
+      && GameState.currentBetTotal === 100; // <-- big blind
   }
 
   function updatePlayersBar() {
