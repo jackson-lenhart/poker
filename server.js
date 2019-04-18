@@ -2,7 +2,7 @@ const express = require('express');
 const http = require('http');
 const socketio = require('socket.io');
 
-const { generateDeck, extractRandomCard } = require('./poker');
+const { generateDeck, extractRandomCard, getHandRank, resolveTie } = require('./poker');
 
 const app = express();
 const server = http.createServer(app);
@@ -22,6 +22,8 @@ const BIG_BLIND = 100;
 
 const WAIT_TO_RESET_MS = 4000;
 
+// Do we need this? Might be able to just set the desired
+// initial state to GameState directly.
 const InitialState = {
   players: [],
   hands: [],
@@ -41,7 +43,7 @@ const InitialState = {
   currentBetTotal: 0,
   statusIndex: 0,
   streetIndex: 0,
-  winner: null
+  winnerIndexes: []
 };
 
 let GameState = { ...InitialState };
@@ -186,10 +188,15 @@ io.on('connection', function(client) {
     } else if (shouldMoveToNextStreet('call', { la })) {
       if (GameState.streetIndex === 3) {
         GameState.statusIndex = 2;
-        const winnerIndex = calculateWinnerIndexAtShowdown();
-        GameState.players[winnerIndex].stack += GameState.pot;
-        GameState.winner = GameState.players[winnerIndex];
+        GameState.winnerIndexes = calculateWinnerIndexesAtShowdown();
+
+        for (const index of GameState.winnerIndexes) {
+          GameState.players[index].stack += GameState.pot / GameState.winnerIndexes.length;
+        }
+
         io.emit('hand-finished', GameState);
+
+        // TODO: Save hand history in some sort of database/persistence layer here.
 
         setTimeout(function() {
           resetHandState();
@@ -227,9 +234,12 @@ io.on('connection', function(client) {
     if (shouldMoveToNextStreet('check')) {
       if (GameState.streetIndex === 3) {
         GameState.statusIndex = 2;
-        const winnerIndex = calculateWinnerIndexAtShowdown();
-        GameState.players[winnerIndex].stack += GameState.pot;
-        GameState.winner = GameState.players[winnerIndex];
+        GameState.winnerIndexes = calculateWinnerIndexesAtShowdown();
+
+        for (const index of GameState.winnerIndexes) {
+          GameState.players[index].stack += GameState.pot / GameState.winnerIndexes.length;
+        }
+
         io.emit('hand-finished', GameState);
 
         setTimeout(function() {
@@ -259,10 +269,11 @@ io.on('connection', function(client) {
     }
 
     if (numActivePlayers === 1) {
-      // If only 1 player remaining the hand is finished.
+      // If only 1 player remaining the hand is finished and the potential
+      // winner is in fact the winner.
       GameState.statusIndex = 2;
       GameState.players[potentialWinnerIndex].stack += GameState.pot;
-      GameState.winner = GameState.players[potentialWinnerIndex];
+      GameState.winnerIndexes = [potentialWinnerIndex];
 
       io.emit('hand-finished', GameState);
 
@@ -279,9 +290,11 @@ io.on('connection', function(client) {
       } else if (shouldMoveToNextStreet('fold', { la })) {
         if (GameState.streetIndex === 3) {
           GameState.statusIndex = 2;
-          const winnerIndex = calculateWinnerIndexAtShowdown();
-          GameState.players[winnerIndex].stack += GameState.pot;
-          GameState.winner = GameState.players[winnerIndex];
+          GameState.winnerIndexes = calculateWinnerIndexesAtShowdown();
+
+          for (const index of GameState.winnerIndexes) {
+            GameState.players[index].stack += GameState.pot / GameState.winnerIndexes.length;
+          }
 
           io.emit('hand-finished', GameState);
 
@@ -371,7 +384,7 @@ function resetHandState() {
   GameState.deck = generateDeck();
   GameState.statusIndex = 0;
   GameState.streetIndex = 0;
-  GameState.winner = null;
+  GameState.winnerIndexes = [];
   GameState.currentBetTotal = 0;
 
   // Empty actions object
@@ -411,6 +424,120 @@ function getCurrentBetTotal() {
   return currentBetTotal;
 }
 
-function calculateWinnerIndexAtShowdown() {
-  /* TODO */
+function calculateWinnerIndexesAtShowdown() {
+  // Difference between GameState.hands and showdownHands is GameState.hands
+  // is just 2 cards, showdownHands will be the best 5 cards of those 2 combined w/ board.
+  const showdownHands = [];
+  for (const hand of GameState.hands) {
+    const combinedHand = hand.concat(GameState.board);
+    combinedHand.sort((a, b) => a.value - b.value);
+
+    const possibleHands = [];
+    const tmp = Array(5).fill(null);
+
+    kSubsets(combinedHand, tmp, possibleHands, 0, 0);
+
+    // DEBUG:
+    console.log('Hand:', hand);
+
+    // All indexes of hands w/ same (winning) rank get put in currBestHandIndexes
+    let currBestHandIndexes = [0];
+    let currBestHandRank = getHandRank(possibleHands[0]);
+    for (let i = 1; i < possibleHands.length/* 21? */; i++) {
+      const currHandRank = getHandRank(possibleHands[i]);
+
+      if (currHandRank < currBestHandRank) {
+        currBestHandIndexes = [i];
+        currBestHandRank = currHandRank;
+      } else if (currHandRank > currBestHandRank) {
+        // Do nothing?
+      } else if (currHandRank === currBestHandRank) {
+        currBestHandIndexes.push(i);
+      } else {
+        console.error(
+          'Somethings gone wrong. currHandRank and currBestHandRank ' +
+          'are probably not comparable as numbers.'
+        );
+      }
+    }
+
+    // DEBUG:
+    console.log('Best hand rank:', currBestHandRank);
+    console.log('Best hand indexes:', currBestHandIndexes);
+    console.log('Possible hands:', possibleHands);
+
+    let resolvedTiesBestHandIndex = currBestHandIndexes[0];
+    for (const index of currBestHandIndexes) {
+      const cmpResult = resolveTie(
+        currBestHandRank,
+        possibleHands[resolvedTiesBestHandIndex],
+        possibleHands[index]
+      );
+
+      if (cmpResult === 2) resolvedTiesBestHandIndex = index;
+    }
+
+    // DEBUG:
+    console.log('Best hand index after resolving ties:', resolvedTiesBestHandIndex);
+    console.log('Best hand:', possibleHands[resolvedTiesBestHandIndex]);
+    console.log('Board:', GameState.board);
+
+    showdownHands.push(possibleHands[resolvedTiesBestHandIndex]);
+  }
+
+  // DEBUG:
+  console.log('Showdown hands:', showdownHands);
+
+  let currWinningHandIndexes = [0];
+  let currWinningHandRank = getHandRank(showdownHands[0]);
+  for (let i = 1; i < showdownHands.length; i++) {
+    // TODO: Optimize. We already get the bestHandRank above we just don't have access
+    // to it here yet.
+    const currHandRank = getHandRank(showdownHands[i]);
+    if (currHandRank < currWinningHandRank) {
+      currWinningHandIndexes = [i];
+      currWinningHandRank = currHandRank;
+    } else if (currHandRank > currWinningHandRank) {
+      // Do nothing?
+    } else if (currHandRank === currWinningHandRank) {
+      const cmpResult = resolveTie(
+        currHandRank,
+        showdownHands[i],
+        showdownHands[currWinningHandIndexes[0]]
+      );
+
+      if (cmpResult === 1) {
+        currWinningHandIndexes = [i];
+      } else if (cmpResult === 2) {
+        // Do nothing.
+      } else if (cmpResult === 0) {
+        currWinningHandIndexes.push(i);
+      } else {
+        console.error(
+          'Unexpected value of cmpResult. Expected 0, 1, or 2; got ' + cmpResult + '.'
+        );
+      }
+    }
+  }
+
+  // DEBUG:
+  console.log('Winning hand indexes:', currWinningHandIndexes);
+  console.log('Winning hand rank:', currWinningHandRank);
+  console.log('Winning hand(s):', currWinningHandIndexes.map(index => showdownHands[index]));
+
+  return currWinningHandIndexes;
+}
+
+function kSubsets(combinedHand, tmp, possibleHands, i, j) {
+  if (j === 5) {
+    possibleHands.push(tmp.slice());
+    return;
+  }
+
+  if (i >= combinedHand.length) return;
+
+  tmp[j] = combinedHand[i];
+  kSubsets(combinedHand, tmp, possibleHands, i + 1, j + 1);
+
+  kSubsets(combinedHand, tmp, possibleHands, i + 1, j);
 }

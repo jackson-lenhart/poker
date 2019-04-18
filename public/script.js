@@ -153,6 +153,7 @@
   var socket = io();
 
   socket.on('connect', function() {
+    username = localStorage.getItem('username');
     if (username) {
       socket.emit('gateway', username);
     } else {
@@ -272,9 +273,16 @@
       updatePlayersBar();
       game.prepend(playersBar);
 
-      var handOverText = document.createTextNode(
-        'Hand finished. ' + GameState.winner.username + ' wins ' + GameState.pot + '.'
-      );
+      var handOverText;
+      if (GameState.winnerIndexes.length === 1) {
+        handOverText = document.createTextNode(
+          'Hand finished. ' + GameState.players[GameState.winnerIndexes[0]].username
+          + ' wins ' + GameState.pot + '.'
+        )
+      } else {
+        handOverText = document.createTextNode('Tie.');
+      }
+
       handOverDisplay.appendChild(handOverText);
       game.prepend(handOverDisplay);
 
@@ -410,11 +418,21 @@
 
   socket.on('hand-finished', function(_GameState) {
     GameState = _GameState;
-
+    
     stack.textContent = GameState.players[playerIndex].stack;
-    var handOverText = document.createTextNode(
-      'Hand finished. ' + GameState.winner.username + ' wins ' + GameState.pot + '.'
-    );
+
+    var handOverText;
+    if (GameState.winnerIndexes.length === 1) {
+      handOverText = document.createTextNode(
+        'Hand finished. ' + GameState.players[GameState.winnerIndexes[0]].username
+        + ' wins ' + GameState.pot + '.'
+      );
+    } else {
+      // TODO: Make this actually into a formatted string/sentence with all
+      // players' usernames who split the pot.
+      handOverText = document.createTextNode('Split pot.');
+    }
+
     handOverDisplay.appendChild(handOverText);
     game.prepend(handOverDisplay);
   });

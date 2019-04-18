@@ -1,7 +1,7 @@
 const assert = require('assert');
 const { expect } = require('chai');
 
-const { generateDeck, extractRandomCard, getHandRank } = require('../poker');
+const { generateDeck, extractRandomCard, getHandRank, resolveTie } = require('../poker');
 
 const deck = generateDeck();
 
@@ -117,11 +117,11 @@ describe('getHandRank', function() {
 
   it('Recognizes 1-pair', function() {
     const mockHand = [
-      { value: 3, suit: 0 },
-      { value: 3, suit: 1 },
-      { value: 8, suit: 0 },
-      { value: 9, suit: 3 },
-      { value: 10, suit: 3 }
+      { value: 2, suit: 0 },
+      { value: 2, suit: 1 },
+      { value: 4, suit: 0 },
+      { value: 5, suit: 3 },
+      { value: 6, suit: 3 }
     ];
 
     expect(getHandRank(mockHand)).to.equal(8);
@@ -137,5 +137,147 @@ describe('getHandRank', function() {
     ];
 
     expect(getHandRank(mockHand)).to.equal(9);
+  });
+});
+
+describe('resolveTie', function() {
+  it('Resolves straight tie correctly', function() {
+    const mockHand1 = [
+      { value: 3, suit: 0 },
+      { value: 4, suit: 1 },
+      { value: 5, suit: 0 },
+      { value: 6, suit: 3 },
+      { value: 7, suit: 2 }
+    ];
+
+    const mockHand2 = [
+      { value: 7, suit: 0 },
+      { value: 8, suit: 1 },
+      { value: 9, suit: 0 },
+      { value: 10, suit: 3 },
+      { value: 11, suit: 2 }
+    ];
+
+    expect(resolveTie(5, mockHand1, mockHand2)).to.equal(2);
+  });
+
+  it('Resolves full house tie correctly', function() {
+    const mockHand1 = [
+      { value: 5, suit: 1 },
+      { value: 5, suit: 2 },
+      { value: 5, suit: 0 },
+      { value: 10, suit: 3 },
+      { value: 10, suit: 2 }
+    ];
+
+    const mockHand2 = [
+      { value: 9, suit: 2 },
+      { value: 9, suit: 1 },
+      { value: 9, suit: 0 },
+      { value: 2, suit: 3 },
+      { value: 2, suit: 2 }
+    ];
+
+    expect(resolveTie(3, mockHand1, mockHand2)).to.equal(2);
+  });
+
+  it('Recognizes absolute tie', function() {
+    const mockHand1 = [
+      { value: 3, suit: 0 },
+      { value: 4, suit: 0 },
+      { value: 5, suit: 1 },
+      { value: 6, suit: 3 },
+      { value: 7, suit: 2 }
+    ];
+
+    const mockHand2 = [
+      { value: 3, suit: 1 },
+      { value: 4, suit: 1 },
+      { value: 5, suit: 2 },
+      { value: 6, suit: 0 },
+      { value: 7, suit: 0 }
+    ];
+
+    expect(resolveTie(5, mockHand1, mockHand2)).to.equal(0);
+  });
+
+  it('Resolves flush tie correctly', function() {
+    const mockHand1 = [
+      { value: 3, suit: 0 },
+      { value: 9, suit: 0 },
+      { value: 11, suit: 0 },
+      { value: 12, suit: 0 },
+      { value: 13, suit: 0 }
+    ];
+
+    const mockHand2 = [
+      { value: 4, suit: 1 },
+      { value: 6, suit: 1 },
+      { value: 7, suit: 1 },
+      { value: 10, suit: 1 },
+      { value: 13, suit: 1 }
+    ];
+
+    expect(resolveTie(4, mockHand1, mockHand2)).to.equal(1);
+  });
+
+  it('Resolves trips tie correctly', function() {
+    const mockHand1 = [
+      { value: 3, suit: 0 },
+      { value: 9, suit: 0 },
+      { value: 11, suit: 0 },
+      { value: 11, suit: 1 },
+      { value: 11, suit: 2 }
+    ];
+
+    const mockHand2 = [
+      { value: 11, suit: 0 },
+      { value: 11, suit: 1 },
+      { value: 11, suit: 3 },
+      { value: 12, suit: 1 },
+      { value: 13, suit: 1 }
+    ];
+
+    expect(resolveTie(6, mockHand1, mockHand2)).to.equal(2);
+  });
+
+  it('Resolves 2-pair tie correctly', function() {
+    const mockHand1 = [
+      { value: 5, suit: 0 },
+      { value: 5, suit: 3 },
+      { value: 11, suit: 0 },
+      { value: 11, suit: 1 },
+      { value: 12, suit: 2 }
+    ];
+
+    const mockHand2 = [
+      { value: 3, suit: 0 },
+      { value: 3, suit: 1 },
+      { value: 11, suit: 3 },
+      { value: 11, suit: 1 },
+      { value: 13, suit: 1 }
+    ];
+
+    expect(resolveTie(7, mockHand1, mockHand2)).to.equal(1);
+  });
+
+  it('Resolves 1-pair tie correctly', function() {
+    const mockHand1 = [
+      { value: 3, suit: 0 },
+      { value: 3, suit: 3 },
+      { value: 10, suit: 0 },
+      { value: 11, suit: 1 },
+      { value: 12, suit: 2 }
+    ];
+
+    const mockHand2 = [
+      { value: 3, suit: 0 },
+      { value: 3, suit: 1 },
+      { value: 9, suit: 3 },
+      { value: 11, suit: 1 },
+      { value: 12, suit: 1 }
+    ];
+
+    expect(resolveTie(8, mockHand1, mockHand2)).to.equal(1);
   });
 });
