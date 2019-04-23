@@ -114,7 +114,9 @@ function isStraight(hand) {
 function resolveTie(handRank, hand1, hand2) {
   // Returns 1 if hand1 wins, 2 if hand2 wins, and 0 if absolute tie (hands are exactly the same).
 
-  // Check for absolute tie (split pot)
+  // Check for absolute tie (split pot).
+  // Given that the hand rank (should be) the same, this will always detect
+  // an absolute tie.
   if (hand1.every((c, i) => c.value === hand2[i].value)) return 0;
 
   /* STRAIGHT-FLUSH AND STRAIGHT */
@@ -189,7 +191,7 @@ function resolveTie(handRank, hand1, hand2) {
 
   /* FLUSH AND HIGH CARD */
 
-  if (handRank === 4) {
+  if (handRank === 4 || handRank === 9) {
     for (let i = 4; i >= 0; i--) {
       if (hand1[i].value > hand2[i].value) return 1;
       else if (hand1[i].value === hand2[i].value) continue;

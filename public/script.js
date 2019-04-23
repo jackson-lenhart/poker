@@ -223,7 +223,6 @@
       game.appendChild(stack);
 
       // Render hand
-      var handContainer = document.createElement('div');
       var handTextElement = document.createElement('h3');
       handTextElement.textContent = JSON.stringify(GameState.hands[playerIndex]);
       handContainer.appendChild(handTextElement);
@@ -256,7 +255,6 @@
       game.appendChild(stack);
 
       // Render hand
-      var handContainer = document.createElement('div');
       var handTextElement = document.createElement('h3');
       handTextElement.textContent = JSON.stringify(GameState.hands[playerIndex]);
       handContainer.appendChild(handTextElement);
@@ -393,10 +391,15 @@
   socket.on('big-blind-option', function(_GameState) {
     GameState = _GameState;
 
+    // Update view
+    potTextElement.textContent = 'Pot: ' + GameState.pot;
+    updatePlayersBar();
+    stack.textContent = GameState.players[playerIndex].stack;
+
     if (playerIndex === GameState.bigBlindIndex) {
       game.insertBefore(betForm, divider);
     }
-  })
+  });
 
   socket.on('next-street', function(_GameState) {
     GameState = _GameState;
@@ -418,7 +421,7 @@
 
   socket.on('hand-finished', function(_GameState) {
     GameState = _GameState;
-    
+
     stack.textContent = GameState.players[playerIndex].stack;
 
     var handOverText;

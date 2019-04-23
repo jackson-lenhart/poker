@@ -280,4 +280,24 @@ describe('resolveTie', function() {
 
     expect(resolveTie(8, mockHand1, mockHand2)).to.equal(1);
   });
+
+  it('Resolves high-card tie correctly', function() {
+    const mockHand1 = [
+      { value: 4, suit: 2 },
+      { value: 6, suit: 3 },
+      { value: 7, suit: 0 },
+      { value: 8, suit: 2 },
+      { value: 9, suit: 2 }
+    ];
+
+    const mockHand2 = [
+      { value: 4, suit: 2 },
+      { value: 7, suit: 0 },
+      { value: 8, suit: 0 },
+      { value: 9, suit: 2 },
+      { value: 11, suit: 2 }
+    ];
+
+    expect(resolveTie(9, mockHand1, mockHand2)).to.equal(2);
+  });
 });

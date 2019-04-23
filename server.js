@@ -214,7 +214,19 @@ io.on('connection', function(client) {
   client.on('bet', function({ playerIndex, amount }) {
     GameState.players[playerIndex].stack -= amount;
     GameState.pot += amount;
-    GameState.currentBetTotal = amount;
+
+    // Special case for big blind option.
+    const la = getLatestAggressiveAction();
+    if (GameState.streetIndex === 0
+      && playerIndex === GameState.bigBlindIndex
+      && la.playerIndex === playerIndex
+      && la.type === 'big-blind'
+    ) {
+      GameState.currentBetTotal = amount + BIG_BLIND;
+    } else {
+      GameState.currentBetTotal = amount;
+    }
+
     GameState.actions[STREETS[GameState.streetIndex]].push({
       playerIndex,
       amount,
@@ -428,23 +440,27 @@ function calculateWinnerIndexesAtShowdown() {
   // Difference between GameState.hands and showdownHands is GameState.hands
   // is just 2 cards, showdownHands will be the best 5 cards of those 2 combined w/ board.
   const showdownHands = [];
-  for (const hand of GameState.hands) {
-    const combinedHand = hand.concat(GameState.board);
+  const handRanks = [];
+  let combinedHand, possibleHands, tmp, currBestHandIndexes, currBestHandRank;
+  for (let i = 0; i < GameState.hands.length; i++) {
+    combinedHand = GameState.hands[i].concat(GameState.board);
     combinedHand.sort((a, b) => a.value - b.value);
 
-    const possibleHands = [];
-    const tmp = Array(5).fill(null);
+    possibleHands = [];
+    tmp = Array(5).fill(null);
 
     kSubsets(combinedHand, tmp, possibleHands, 0, 0);
 
     // DEBUG:
-    console.log('Hand:', hand);
+    console.log('Username:', GameState.players[i].username);
+    console.log('Hand:', GameState.hands[i]);
 
     // All indexes of hands w/ same (winning) rank get put in currBestHandIndexes
-    let currBestHandIndexes = [0];
-    let currBestHandRank = getHandRank(possibleHands[0]);
+    currBestHandIndexes = [0];
+    currBestHandRank = getHandRank(possibleHands[0]);
+    let currHandRank;
     for (let i = 1; i < possibleHands.length/* 21? */; i++) {
-      const currHandRank = getHandRank(possibleHands[i]);
+      currHandRank = getHandRank(possibleHands[i]);
 
       if (currHandRank < currBestHandRank) {
         currBestHandIndexes = [i];
@@ -467,8 +483,9 @@ function calculateWinnerIndexesAtShowdown() {
     console.log('Possible hands:', possibleHands);
 
     let resolvedTiesBestHandIndex = currBestHandIndexes[0];
+    let cmpResult;
     for (const index of currBestHandIndexes) {
-      const cmpResult = resolveTie(
+      cmpResult = resolveTie(
         currBestHandRank,
         possibleHands[resolvedTiesBestHandIndex],
         possibleHands[index]
@@ -483,25 +500,24 @@ function calculateWinnerIndexesAtShowdown() {
     console.log('Board:', GameState.board);
 
     showdownHands.push(possibleHands[resolvedTiesBestHandIndex]);
+    handRanks.push(currBestHandRank);
   }
 
   // DEBUG:
   console.log('Showdown hands:', showdownHands);
 
   let currWinningHandIndexes = [0];
-  let currWinningHandRank = getHandRank(showdownHands[0]);
+  let currWinningHandRank = handRanks[0];
+  let cmpResult;
   for (let i = 1; i < showdownHands.length; i++) {
-    // TODO: Optimize. We already get the bestHandRank above we just don't have access
-    // to it here yet.
-    const currHandRank = getHandRank(showdownHands[i]);
-    if (currHandRank < currWinningHandRank) {
+    if (handRanks[i] < currWinningHandRank) {
       currWinningHandIndexes = [i];
-      currWinningHandRank = currHandRank;
-    } else if (currHandRank > currWinningHandRank) {
+      currWinningHandRank = handRanks[i];
+    } else if (handRanks[i] > currWinningHandRank) {
       // Do nothing?
-    } else if (currHandRank === currWinningHandRank) {
-      const cmpResult = resolveTie(
-        currHandRank,
+    } else if (handRanks[i] === currWinningHandRank) {
+      cmpResult = resolveTie(
+        handRanks[i],
         showdownHands[i],
         showdownHands[currWinningHandIndexes[0]]
       );
