@@ -60,7 +60,6 @@
 
   // Hand
   var handContainer = document.createElement('div');
-  var handTextElement = document.createElement('h3');
 
   // Stack
   var stack = document.createElement('div');
@@ -71,8 +70,6 @@
 
   // The board
   var boardContainer = document.createElement('div');
-  var boardTextElement = document.createElement('h5');
-  boardContainer.appendChild(boardTextElement);
 
   // Bet text
   var betText = document.createElement('p');
@@ -256,18 +253,16 @@
       game.appendChild(stack);
 
       // Render hand
-      var handTextElement = document.createElement('h3');
-      handTextElement.textContent = JSON.stringify(GameState.hands[playerIndex]);
-      handContainer.appendChild(handTextElement);
+      renderHand();
       game.prepend(handContainer);
 
       // Render pot
       potTextElement.textContent = 'Pot: ' + GameState.pot;
       game.prepend(potContainer);
 
+      // Render board
       if (GameState.board.length > 0) {
-        boardTextElement.textContent = JSON.stringify(GameState.board);
-
+        renderBoard();
         game.prepend(boardContainer);
       }
 
@@ -288,17 +283,14 @@
       game.appendChild(stack);
 
       // Render hand
-      var handTextElement = document.createElement('h3');
-      handTextElement.textContent = JSON.stringify(GameState.hands[playerIndex]);
-      handContainer.appendChild(handTextElement);
+      renderHand();
       game.prepend(handContainer);
 
       // Render pot
       potTextElement.textContent = 'Pot: ' + GameState.pot;
       game.prepend(potContainer);
 
-      boardTextElement.textContent = JSON.stringify(GameState.board);
-
+      renderBoard();
       game.prepend(boardContainer);
 
       updatePlayersBar();
@@ -349,8 +341,7 @@
     }
 
     // Render hand
-    handTextElement.textContent = JSON.stringify(GameState.hands[playerIndex]);
-    handContainer.appendChild(handTextElement);
+    renderHand();
     game.prepend(handContainer);
 
     // Update stack text
@@ -448,9 +439,11 @@
   socket.on('next-street', function(_GameState, isAllin) {
     GameState = _GameState;
 
-    boardTextElement.textContent = JSON.stringify(GameState.board);
+    // If it is the flop
+    if (GameState.streetIndex === 1) renderBoard();
+    else appendCardToBoard();
 
-    // If it is the flop and we haven't inserted the board into the view yet.
+    // If we haven't inserted the board into the view yet.
     if (!game.contains(boardContainer)) {
       game.insertBefore(boardContainer, potContainer);
     }
@@ -613,6 +606,63 @@
     var amountToCall = calculateAmountToCall();
 
     betText.textContent = 'Bet is ' + betTotal + ', ' + amountToCall + ' to call.';
+  }
+
+  function renderHand() {
+    // Remove existing cards if there are any.
+    while (handContainer.firstChild) handContainer.removeChild(handContainer.firstChild);
+
+    var cardImage;
+
+    // Card 1
+    cardImage = new Image(75, 150);
+    cardImage.src = mapCardDataToImgSrc(GameState.hands[playerIndex][0])
+
+    handContainer.appendChild(cardImage);
+
+    // Card 2
+    cardImage = new Image(75, 150);
+    cardImage.src = mapCardDataToImgSrc(GameState.hands[playerIndex][1])
+
+    handContainer.appendChild(cardImage);
+  }
+
+  function renderBoard() {
+    // Remove existing cards if there are any.
+    while (boardContainer.firstChild) boardContainer.removeChild(boardContainer.firstChild);
+
+    var cardImage;
+    for (var i = 0; i < GameState.board.length; i++) {
+      cardImage = new Image(100, 200);
+      cardImage.src = mapCardDataToImgSrc(GameState.board[i]);
+
+      boardContainer.appendChild(cardImage);
+    }
+  }
+
+  function appendCardToBoard() {
+    var cardImage = new Image(100, 200);
+    cardImage.src = mapCardDataToImgSrc(GameState.board[GameState.board.length - 1]);
+
+    boardContainer.appendChild(cardImage);
+  }
+
+  function mapCardDataToImgSrc(card) {
+    var src = 'card-images/';
+
+    if (card.value >= 2 && card.value <= 10) src += card.value;
+    else if (card.value === 11) src += 'J';
+    else if (card.value === 12) src += 'Q';
+    else if (card.value === 13) src += 'K';
+    else if (card.value === 14) src += 'A';
+
+    if (card.suit === 0) src += 'S';
+    else if (card.suit === 1) src += 'C';
+    else if (card.suit === 2) src += 'H';
+    else if (card.suit === 3) src += 'D';
+
+    src += '.png';
+    return src;
   }
 
   function bet(event) {

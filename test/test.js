@@ -57,7 +57,7 @@ describe('getHandRank', function() {
 
   it('Recognizes a wheel', function() {
     const mockHand = [
-      { value: 2, suit: 4 },
+      { value: 2, suit: 3 },
       { value: 3, suit: 3 },
       { value: 4, suit: 0 },
       { value: 5, suit: 1 },
