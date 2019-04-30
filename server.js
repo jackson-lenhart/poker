@@ -21,6 +21,7 @@ const SMALL_BLIND = 50;
 const BIG_BLIND = 100;
 
 const WAIT_TO_RESET_MS = 4000;
+const ALLIN_BETWEEN_STREETS_MS = 2500;
 
 // Do we need this? Might be able to just set the desired
 // initial state to GameState directly.
@@ -84,6 +85,10 @@ io.on('connection', function(client) {
 
       client.broadcast.emit('join', GameState);
     }
+  });
+
+  client.on('disconnect', function(reason) {
+    // TODO
   });
 
   client.on('gateway', function(username) {
@@ -173,6 +178,12 @@ io.on('connection', function(client) {
   });
 
   client.on('call', function({ playerIndex, amountToCall }) {
+    debugger;
+    if (amountToCall >= GameState.players[playerIndex].stack) {
+      // Calling all in.
+      amountToCall = GameState.players[playerIndex].stack;
+    }
+
     GameState.players[playerIndex].stack -= amountToCall;
     GameState.pot += amountToCall;
     GameState.actions[STREETS[GameState.streetIndex]].push({
@@ -180,34 +191,32 @@ io.on('connection', function(client) {
       amount: amountToCall,
       type: 'call'
     });
+
+    let numPlayersNotAllin = 0;
+    for (const player of GameState.players) {
+      if (player.stack > 0) numPlayersNotAllin++;
+    }
+
+    if (numPlayersNotAllin <= 1) {
+      // Calling all-in for the effective stack.
+      io.emit('call', GameState, true);
+      return allinRunoutProc();
+    }
+
     incrementActionIndex();
+    const laa = getLatestAggressiveAction();
 
-    const la = getLatestAggressiveAction();
-    if (la.type === 'big-blind') {
+    if (laa.type === 'big-blind') {
       io.emit('big-blind-option', GameState);
-    } else if (shouldMoveToNextStreet('call', { la })) {
+    } else if (shouldMoveToNextStreet('call', { laa })) {
       if (GameState.streetIndex === 3) {
-        GameState.statusIndex = 2;
-        GameState.winnerIndexes = calculateWinnerIndexesAtShowdown();
-
-        for (const index of GameState.winnerIndexes) {
-          GameState.players[index].stack += GameState.pot / GameState.winnerIndexes.length;
-        }
-
-        io.emit('hand-finished', GameState);
-
-        // TODO: Save hand history in some sort of database/persistence layer here.
-
-        setTimeout(function() {
-          resetHandState();
-          io.emit('reset', GameState);
-        }, WAIT_TO_RESET_MS);
+        showdownProc();
       } else {
         moveToNextStreet();
         io.emit('next-street', GameState);
       }
     } else {
-      io.emit('call', GameState);
+      io.emit('call', GameState, false);
     }
   });
 
@@ -216,11 +225,11 @@ io.on('connection', function(client) {
     GameState.pot += amount;
 
     // Special case for big blind option.
-    const la = getLatestAggressiveAction();
+    const laa = getLatestAggressiveAction();
     if (GameState.streetIndex === 0
       && playerIndex === GameState.bigBlindIndex
-      && la.playerIndex === playerIndex
-      && la.type === 'big-blind'
+      && laa.playerIndex === playerIndex
+      && laa.type === 'big-blind'
     ) {
       GameState.currentBetTotal = amount + BIG_BLIND;
     } else {
@@ -245,19 +254,7 @@ io.on('connection', function(client) {
 
     if (shouldMoveToNextStreet('check')) {
       if (GameState.streetIndex === 3) {
-        GameState.statusIndex = 2;
-        GameState.winnerIndexes = calculateWinnerIndexesAtShowdown();
-
-        for (const index of GameState.winnerIndexes) {
-          GameState.players[index].stack += GameState.pot / GameState.winnerIndexes.length;
-        }
-
-        io.emit('hand-finished', GameState);
-
-        setTimeout(function() {
-          resetHandState();
-          io.emit('reset', GameState);
-        }, WAIT_TO_RESET_MS);
+        showdownProc();
       } else {
         moveToNextStreet();
         io.emit('next-street', GameState);
@@ -296,24 +293,12 @@ io.on('connection', function(client) {
     } else {
       incrementActionIndex();
 
-      const la = getLatestAggressiveAction();
-      if (GameState.actionIndex === GameState.bigBlindIndex && la.type === 'big-blind') {
+      const laa = getLatestAggressiveAction();
+      if (GameState.actionIndex === GameState.bigBlindIndex && laa.type === 'big-blind') {
         io.emit('big-blind-option', GameState);
-      } else if (shouldMoveToNextStreet('fold', { la })) {
+      } else if (shouldMoveToNextStreet('fold', { laa })) {
         if (GameState.streetIndex === 3) {
-          GameState.statusIndex = 2;
-          GameState.winnerIndexes = calculateWinnerIndexesAtShowdown();
-
-          for (const index of GameState.winnerIndexes) {
-            GameState.players[index].stack += GameState.pot / GameState.winnerIndexes.length;
-          }
-
-          io.emit('hand-finished', GameState);
-
-          setTimeout(function() {
-            resetHandState();
-            io.emit('reset', GameState);
-          }, WAIT_TO_RESET_MS);
+          showdownProc();
         } else {
           moveToNextStreet();
           io.emit('next-street', GameState);
@@ -322,6 +307,21 @@ io.on('connection', function(client) {
         io.emit('fold', GameState);
       }
     }
+  });
+
+  client.on('top-off', function(playerIndex) {
+    if (!GameState.players[playerIndex]) {
+      console.error(`Could not find player at index ${playerIndex}.`);
+      return;
+    }
+
+    console.log(
+      `${GameState.players[playerIndex].username} topped off for ` +
+      `${10000 - GameState.players[playerIndex].stack}.`
+    );
+
+    GameState.players[playerIndex].stack = 10000;
+    io.emit('top-off', GameState);
   });
 });
 
@@ -349,7 +349,7 @@ function shouldMoveToNextStreet(eventType, infoObj) {
       else return false;
     }
   } else {
-    if (infoObj.la.playerIndex === GameState.actionIndex) return true;
+    if (infoObj.laa.playerIndex === GameState.actionIndex) return true;
     else return false;
   }
 }
@@ -442,6 +442,7 @@ function calculateWinnerIndexesAtShowdown() {
   const showdownHands = [];
   const handRanks = [];
   let combinedHand, possibleHands, tmp, currBestHandIndexes, currBestHandRank;
+  console.log('Board:', GameState.board);
   for (let i = 0; i < GameState.hands.length; i++) {
     combinedHand = GameState.hands[i].concat(GameState.board);
     combinedHand.sort((a, b) => a.value - b.value);
@@ -453,7 +454,7 @@ function calculateWinnerIndexesAtShowdown() {
 
     // DEBUG:
     console.log('Username:', GameState.players[i].username);
-    console.log('Hand:', GameState.hands[i]);
+    console.log('Pocket cards:', GameState.hands[i]);
 
     // All indexes of hands w/ same (winning) rank get put in currBestHandIndexes
     currBestHandIndexes = [0];
@@ -478,9 +479,7 @@ function calculateWinnerIndexesAtShowdown() {
     }
 
     // DEBUG:
-    console.log('Best hand rank:', currBestHandRank);
-    console.log('Best hand indexes:', currBestHandIndexes);
-    console.log('Possible hands:', possibleHands);
+    console.log('Hand rank:', currBestHandRank);
 
     let resolvedTiesBestHandIndex = currBestHandIndexes[0];
     let cmpResult;
@@ -495,9 +494,7 @@ function calculateWinnerIndexesAtShowdown() {
     }
 
     // DEBUG:
-    console.log('Best hand index after resolving ties:', resolvedTiesBestHandIndex);
-    console.log('Best hand:', possibleHands[resolvedTiesBestHandIndex]);
-    console.log('Board:', GameState.board);
+    console.log('Hand:', possibleHands[resolvedTiesBestHandIndex]);
 
     showdownHands.push(possibleHands[resolvedTiesBestHandIndex]);
     handRanks.push(currBestHandRank);
@@ -537,11 +534,87 @@ function calculateWinnerIndexesAtShowdown() {
   }
 
   // DEBUG:
-  console.log('Winning hand indexes:', currWinningHandIndexes);
   console.log('Winning hand rank:', currWinningHandRank);
   console.log('Winning hand(s):', currWinningHandIndexes.map(index => showdownHands[index]));
 
+  let winners = GameState.players[currWinningHandIndexes[0]].username;
+  for (let i = 1; i < currWinningHandIndexes.length; i++) {
+    winners += ',' + GameState.players[currWinningHandIndexes[i]].username;
+  }
+  console.log('Winner(s):', winners);
+
   return currWinningHandIndexes;
+}
+
+function allinRunoutProc() {
+
+  // Resolving effective stack sizes here.
+  // WARNING: This will only work for heads-up. In order to work for
+  // 3+ handed I will need to implement side pots.
+
+  // For now I'm just finding the bigger stack and adding the difference
+  // back into it.
+  const actions = GameState.actions[STREETS[GameState.streetIndex]];
+  const shove = actions[actions.length - 2];
+  const call = actions[actions.length - 1];
+
+  // Again, this will only work for heads-up (2-player).
+  let sumContributionsOfShover = 0;
+  let sumContributionsOfCaller = 0;
+  for (const action of actions) {
+    if (action.amount) {
+      if (action.playerIndex === shove.playerIndex) {
+        sumContributionsOfShover += action.amount;
+      } else if (action.playerIndex === call.playerIndex) {
+        sumContributionsOfCaller += action.amount;
+      } else {
+        // DEBUG:
+        throw new Error(
+          `Player index ${action.playerIndex} of action does not match ` +
+          `index of shover ${shove.playerIndex} or index of caller ${call.playerIndex}`
+        );
+      }
+    }
+  }
+
+  if (sumContributionsOfShover > sumContributionsOfCaller) {
+    // Here is where the reconciliation actually happens if it needs to.
+    const balanceDueToShover = sumContributionsOfShover - sumContributionsOfCaller;
+
+    GameState.pot -= balanceDueToShover;
+    GameState.players[shove.playerIndex].stack += balanceDueToShover;
+
+    io.emit('resolve-effective-stacks', GameState);
+  }
+
+  // Fire next-street events every 2.5 seconds until streetIndex is 3 (river)
+  const runoutInterval = setInterval(function() {
+    if (GameState.streetIndex >= 3) {
+      showdownProc();
+      clearInterval(runoutInterval);
+    } else {
+      moveToNextStreet();
+      io.emit('next-street', GameState, true);
+    }
+  }, ALLIN_BETWEEN_STREETS_MS);
+}
+
+function showdownProc() {
+  GameState.statusIndex = 2;
+  GameState.winnerIndexes = calculateWinnerIndexesAtShowdown();
+
+  for (const index of GameState.winnerIndexes) {
+    GameState.players[index].stack += GameState.pot / GameState.winnerIndexes.length;
+  }
+
+  io.emit('hand-finished', GameState);
+
+  // TODO: Save hand history in some sort of database/persistence layer here.
+
+  setTimeout(function() {
+    resetHandState();
+    io.emit('reset', GameState);
+  }, WAIT_TO_RESET_MS);
 }
 
 function kSubsets(combinedHand, tmp, possibleHands, i, j) {

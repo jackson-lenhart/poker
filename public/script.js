@@ -46,6 +46,12 @@
   readyButton.textContent = 'Ready';
   readyButton.onclick = signifyReadiness;
 
+  // Top off button
+  var topOffButton = document.createElement('button');
+  topOffButton.type = 'button';
+  topOffButton.textContent = 'Top off';
+  topOffButton.onclick = topOff;
+
   // Pot
   var potContainer = document.createElement('div');
   potContainer.className = 'pot';
@@ -93,10 +99,16 @@
   checkButton.onclick = check;
   checkButton.textContent = 'Check';
 
+  var betAllinButton = document.createElement('button');
+  betAllinButton.type = 'button';
+  betAllinButton.onclick = allin.bind(null, 'bet');
+  betAllinButton.textContent = 'All in';
+
   betForm.appendChild(betInputLabel);
   betForm.appendChild(betInputField);
   betForm.appendChild(betButton);
   betForm.appendChild(checkButton);
+  betForm.appendChild(betAllinButton);
 
   // Raise/fold form
   var raiseForm = document.createElement('form');
@@ -126,11 +138,17 @@
   foldButton.onclick = fold;
   foldButton.textContent = 'Fold';
 
+  var raiseAllinButton = document.createElement('button');
+  raiseAllinButton.type = 'button';
+  raiseAllinButton.onclick = allin.bind(null, 'raise');
+  raiseAllinButton.textContent = 'All in';
+
   raiseForm.appendChild(raiseInputLabel);
   raiseForm.appendChild(raiseInputField);
   raiseForm.appendChild(raiseButton);
   raiseForm.appendChild(callButton);
   raiseForm.appendChild(foldButton);
+  raiseForm.appendChild(raiseAllinButton);
 
   var handOverDisplay = document.createElement('div');
 
@@ -213,7 +231,22 @@
       game.appendChild(playerText);
 
       if (GameState.actionIndex === playerIndex) {
-        renderBetOrRaiseForm();
+        // Check if 1 or fewer players are left without their chips all-in
+        var numPlayersNotAllin = 0;
+        for (var i = 0; i < GameState.players.length; i++) {
+          if (GameState.players[i].stack > 0) numPlayersNotAllin++;
+        }
+
+        // HACK: This condition will only work if playing heads-up.
+        // Temporary hack until side-pots are implemented.
+        // debugger;
+        var actions = GameState.actions[STREETS[GameState.streetIndex]];
+        var len = actions.length;
+        if (numPlayersNotAllin <= 1 && actions[len - 1].type === 'call') {
+          // Do nothing.
+        } else {
+          renderBetOrRaiseForm();
+        }
       }
 
       var br = document.createElement('br');
@@ -297,6 +330,14 @@
     console.log('Gateway failure:', gatewayFailureData.msg);
   });
 
+  socket.on('top-off', function(_GameState) {
+    GameState = _GameState;
+
+    stack.textContent = GameState.players[playerIndex].stack;
+    game.removeChild(topOffButton);
+    if (!game.contains(readyButton)) game.appendChild(readyButton);
+  });
+
   socket.on('start-hand', function(_GameState) {
     GameState = _GameState;
 
@@ -323,6 +364,7 @@
     game.prepend(playersBar);
 
     game.removeChild(readyWaitingText);
+    if (game.contains(topOffButton)) game.removeChild(topOffButton);
   });
 
   socket.on('raise', function(_GameState) {
@@ -337,7 +379,7 @@
     if (GameState.actionIndex === playerIndex) renderBetOrRaiseForm();
   });
 
-  socket.on('call', function(_GameState) {
+  socket.on('call', function(_GameState, isAllin) {
     GameState = _GameState;
 
     // Update view
@@ -345,7 +387,9 @@
     updatePlayersBar();
     stack.textContent = GameState.players[playerIndex].stack;
 
-    if (GameState.actionIndex === playerIndex) {
+    if (isAllin) {
+      // Do nothing.
+    } else if (GameState.actionIndex === playerIndex) {
       updateBetText();
       game.insertBefore(raiseForm, divider);
       game.insertBefore(betText, raiseForm);
@@ -401,27 +445,40 @@
     }
   });
 
-  socket.on('next-street', function(_GameState) {
+  socket.on('next-street', function(_GameState, isAllin) {
     GameState = _GameState;
 
     boardTextElement.textContent = JSON.stringify(GameState.board);
-    potTextElement.textContent = 'Pot: ' + GameState.pot;
-    updatePlayersBar();
-    stack.textContent = GameState.players[playerIndex].stack;
 
     // If it is the flop and we haven't inserted the board into the view yet.
     if (!game.contains(boardContainer)) {
       game.insertBefore(boardContainer, potContainer);
     }
 
+    if (isAllin) return;
+
+    potTextElement.textContent = 'Pot: ' + GameState.pot;
+    updatePlayersBar();
+    stack.textContent = GameState.players[playerIndex].stack;
+
     if (GameState.actionIndex === playerIndex) {
       game.insertBefore(betForm, divider);
     }
   });
 
+  socket.on('resolve-effective-stacks', function(_GameState) {
+    GameState = _GameState;
+
+    potTextElement.textContent = 'Pot: ' + GameState.pot;
+    updatePlayersBar();
+    stack.textContent = GameState.players[playerIndex].stack;
+  });
+
   socket.on('hand-finished', function(_GameState) {
     GameState = _GameState;
 
+    potTextElement.textContent = 'Pot: ' + GameState.pot;
+    updatePlayersBar();
     stack.textContent = GameState.players[playerIndex].stack;
 
     var handOverText;
@@ -482,8 +539,13 @@
     stack.textContent = GameState.players[playerIndex].stack;
     game.appendChild(stack);
 
-    if (GameState.players.length >= 2) game.appendChild(readyButton);
-    else game.appendChild(waitingText);
+    if (GameState.players.length >= 2) {
+      if (GameState.players[playerIndex].stack > 0) game.appendChild(readyButton);
+    } else {
+      game.appendChild(waitingText);
+    }
+
+    if (GameState.players[playerIndex].stack < 10000) game.appendChild(topOffButton);
 
     container.removeChild(spinner);
     container.appendChild(game);
@@ -492,8 +554,13 @@
   function signifyReadiness() {
     game.removeChild(readyButton);
     game.appendChild(readyWaitingText);
+    if (game.contains(topOffButton)) game.removeChild(topOffButton);
 
     socket.emit('ready', playerIndex);
+  }
+
+  function topOff() {
+    socket.emit('top-off', playerIndex);
   }
 
   function renderBetOrRaiseForm() {
@@ -572,6 +639,29 @@
     socket.emit('bet', { playerIndex: playerIndex, amount: amount });
   }
 
+  function allin(allinType) {
+    if (allinType === 'bet') {
+      betInputField.value = '';
+      game.removeChild(betForm);
+
+      socket.emit('bet', {
+        playerIndex: playerIndex,
+        amount: GameState.players[playerIndex].stack
+      });
+    } else if (allinType == 'raise') {
+      raiseInputField.value = '';
+      game.removeChild(raiseForm);
+      game.removeChild(betText);
+
+      socket.emit('raise', {
+        playerIndex: playerIndex,
+        amount: GameState.players[playerIndex].stack
+      });
+    } else {
+      throw new Error('Invalid allinType passed to allin:', allinType);
+    }
+  }
+
   function check() {
     event.preventDefault();
 
@@ -636,6 +726,12 @@
       }
     }
 
-    return GameState.currentBetTotal - myBetTotal;
+    const amountToCall = GameState.currentBetTotal - myBetTotal;
+    if (amountToCall > GameState.players[playerIndex].stack) {
+      // Special case for all-in to call.
+      return GameState.players[playerIndex].stack;
+    } else {
+      return amountToCall;
+    }
   }
 })();
