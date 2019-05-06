@@ -3,6 +3,7 @@ const http = require('http');
 const socketio = require('socket.io');
 
 const { generateDeck, extractRandomCard, getHandRank, resolveTie } = require('./poker');
+const { Status, Street } = require('./public/enums');
 
 const app = express();
 const server = http.createServer(app);
@@ -13,10 +14,6 @@ const io = socketio(server);
 // rather than having the server be stateful.
 
 const BUY_IN = 10000;
-// GameState will loop through these statuses as the game progresses.
-const STATUSES = ['LOBBY', 'HAND', 'FINISHED'];
-const STREETS = ['PRE-FLOP', 'FLOP', 'TURN', 'RIVER'];
-
 const SMALL_BLIND = 50;
 const BIG_BLIND = 100;
 
@@ -35,15 +32,15 @@ const InitialState = {
   actionIndex: 0,
   pot: 0,
   actions: {
-    'PRE-FLOP': [],
-    'FLOP': [],
-    'TURN': [],
-    'RIVER': []
+    [Street.PRE_FLOP]: [],
+    [Street.FLOP]: [],
+    [Street.TURN]: [],
+    [Street.RIVER]: []
   },
   board: [],
   currentBetTotal: 0,
-  statusIndex: 0,
-  streetIndex: 0,
+  status: Status.LOBBY,
+  street: Street.PRE_FLOP,
   winnerIndexes: []
 };
 
@@ -104,7 +101,7 @@ io.on('connection', function(client) {
 
     // If everyone is ready, initialize a pot and deal out some hands
     if (GameState.players.every(p => p.ready)) {
-      GameState.statusIndex = 1;
+      GameState.status = Status.HAND;
 
       GameState.smallBlindIndex = GameState.bigBlindIndex - 1;
       if (GameState.smallBlindIndex < 0) {
@@ -122,14 +119,14 @@ io.on('connection', function(client) {
 
       // Post small and big blinds. Blinds hard coded to 50-100 for now (no ante)
       GameState.players[GameState.smallBlindIndex].stack -= SMALL_BLIND;
-      GameState.actions['PRE-FLOP'].push({
+      GameState.actions[Street.PRE_FLOP].push({
         amount: SMALL_BLIND,
         playerIndex: GameState.smallBlindIndex,
         type: 'small-blind'
       });
 
       GameState.players[GameState.bigBlindIndex].stack -= BIG_BLIND;
-      GameState.actions['PRE-FLOP'].push({
+      GameState.actions[Street.PRE_FLOP].push({
         amount: BIG_BLIND,
         playerIndex: GameState.bigBlindIndex,
         type: 'big-blind'
@@ -160,7 +157,7 @@ io.on('connection', function(client) {
   client.on('raise', function({ amount, playerIndex }) {
     GameState.players[playerIndex].stack -= amount;
     GameState.pot += amount
-    GameState.actions[STREETS[GameState.streetIndex]].push({
+    GameState.actions[GameState.street].push({
       amount,
       playerIndex,
       type: 'raise'
@@ -180,7 +177,7 @@ io.on('connection', function(client) {
 
     GameState.players[playerIndex].stack -= amountToCall;
     GameState.pot += amountToCall;
-    GameState.actions[STREETS[GameState.streetIndex]].push({
+    GameState.actions[GameState.street].push({
       playerIndex,
       amount: amountToCall,
       type: 'call'
@@ -203,7 +200,7 @@ io.on('connection', function(client) {
     if (laa.type === 'big-blind') {
       io.emit('big-blind-option', GameState);
     } else if (shouldMoveToNextStreet('call', { laa })) {
-      if (GameState.streetIndex === 3) {
+      if (GameState.street === Street.RIVER) {
         showdownProc();
       } else {
         moveToNextStreet();
@@ -220,7 +217,7 @@ io.on('connection', function(client) {
 
     // Special case for big blind option.
     const laa = getLatestAggressiveAction();
-    if (GameState.streetIndex === 0
+    if (GameState.street === Street.PRE_FLOP
       && playerIndex === GameState.bigBlindIndex
       && laa.playerIndex === playerIndex
       && laa.type === 'big-blind'
@@ -230,7 +227,7 @@ io.on('connection', function(client) {
       GameState.currentBetTotal = amount;
     }
 
-    GameState.actions[STREETS[GameState.streetIndex]].push({
+    GameState.actions[GameState.street].push({
       playerIndex,
       amount,
       type: 'bet'
@@ -241,13 +238,13 @@ io.on('connection', function(client) {
   });
 
   client.on('check', function({ playerIndex }) {
-    GameState.actions[STREETS[GameState.streetIndex]].push({
+    GameState.actions[GameState.street].push({
       playerIndex,
       type: 'check'
     });
 
     if (shouldMoveToNextStreet('check')) {
-      if (GameState.streetIndex === 3) {
+      if (GameState.street === Street.RIVER) {
         showdownProc();
       } else {
         moveToNextStreet();
@@ -274,7 +271,7 @@ io.on('connection', function(client) {
     if (numActivePlayers === 1) {
       // If only 1 player remaining the hand is finished and the potential
       // winner is in fact the winner.
-      GameState.statusIndex = 2;
+      GameState.status = Status.FINISHED;
       GameState.players[potentialWinnerIndex].stack += GameState.pot;
       GameState.winnerIndexes = [potentialWinnerIndex];
 
@@ -291,7 +288,7 @@ io.on('connection', function(client) {
       if (GameState.actionIndex === GameState.bigBlindIndex && laa.type === 'big-blind') {
         io.emit('big-blind-option', GameState);
       } else if (shouldMoveToNextStreet('fold', { laa })) {
-        if (GameState.streetIndex === 3) {
+        if (GameState.street === Street.RIVER) {
           showdownProc();
         } else {
           moveToNextStreet();
@@ -335,7 +332,7 @@ function incrementActionIndex() {
 
 function shouldMoveToNextStreet(eventType, infoObj) {
   if (eventType === 'check') {
-    if (STREETS[GameState.streetIndex] === 'PRE-FLOP') {
+    if (GameState.street === Street.PRE_FLOP) {
       if (GameState.actionIndex === GameState.bigBlindIndex) return true;
       else return false;
     } else {
@@ -349,7 +346,7 @@ function shouldMoveToNextStreet(eventType, infoObj) {
 }
 
 function moveToNextStreet() {
-  GameState.streetIndex++;
+  GameState.street++;
 
   // Action always starts to the 'left' of the button
   if (GameState.players.length === 2) {
@@ -370,11 +367,13 @@ function moveToNextStreet() {
   } else {
     GameState.board.push(extractRandomCard(GameState.deck));
   }
+
+  GameState.currentBetTotal = 0;
 }
 
 function getLatestAggressiveAction() {
   let action;
-  for (const a of GameState.actions[STREETS[GameState.streetIndex]]) {
+  for (const a of GameState.actions[GameState.street]) {
     if (a.amount && a.type !== 'call') {
       action = a;
     }
@@ -388,8 +387,8 @@ function resetHandState() {
   GameState.pot = 0;
   GameState.board = [];
   GameState.deck = generateDeck();
-  GameState.statusIndex = 0;
-  GameState.streetIndex = 0;
+  GameState.status = Status.LOBBY;
+  GameState.street = Street.PRE_FLOP;
   GameState.winnerIndexes = [];
   GameState.currentBetTotal = 0;
 
@@ -413,16 +412,16 @@ function resetHandState() {
 
 function getCurrentBetTotal() {
   // Sum up all bets from the latest bettor to get the current bet
-  let latestBettorIndex;
-  for (const a of GameState.actions[STREETS[GameState.streetIndex]]) {
-    if (a.amount) {
-      latestBettorIndex = a.playerIndex
+  let latestAggressorIndex;
+  for (const a of GameState.actions[GameState.street]) {
+    if (a.type === 'bet' || a.type === 'raise') {
+      latestAggressorIndex = a.playerIndex
     }
   }
 
   let currentBetTotal = 0;
-  for (const a of GameState.actions[STREETS[GameState.streetIndex]]) {
-    if (a.playerIndex === latestBettorIndex && a.amount) {
+  for (const a of GameState.actions[GameState.street]) {
+    if (a.playerIndex === latestAggressorIndex && a.amount) {
       currentBetTotal += a.amount;
     }
   }
@@ -548,7 +547,7 @@ function allinRunoutProc() {
 
   // For now I'm just finding the bigger stack and adding the difference
   // back into it.
-  const actions = GameState.actions[STREETS[GameState.streetIndex]];
+  const actions = GameState.actions[GameState.street];
   const shove = actions[actions.length - 2];
   const call = actions[actions.length - 1];
 
@@ -583,7 +582,7 @@ function allinRunoutProc() {
 
   // Fire next-street events every 2.5 seconds until streetIndex is 3 (river)
   const runoutInterval = setInterval(function() {
-    if (GameState.streetIndex >= 3) {
+    if (GameState.street >= Street.RIVER) {
       showdownProc();
       clearInterval(runoutInterval);
     } else {
@@ -594,7 +593,7 @@ function allinRunoutProc() {
 }
 
 function showdownProc() {
-  GameState.statusIndex = 2;
+  GameState.status = Status.FINISHED;
   GameState.winnerIndexes = calculateWinnerIndexesAtShowdown();
 
   for (const index of GameState.winnerIndexes) {

@@ -2,10 +2,10 @@
 
 /* GLOBALS */
 
-var username = localStorage.getItem('username');
 var GameState;
+
+var username = localStorage.getItem('username');
 var playerIndex;
-var STREETS = ['PRE-FLOP', 'FLOP', 'TURN', 'RIVER'];
 
 var elements = {
   root: makeElement('div', { className: 'container' }),
@@ -90,18 +90,6 @@ socket.on('top-off', function(_GameState) {
   GameState = _GameState;
 
   elements.stack.textContent = GameState.players[playerIndex].stack;
-  elements.game.removeChild(elements.topOffButton);
-  if (!elements.game.contains(elements.readyButton)) {
-    if (!elements.hasOwnProperty('readyButton')) {
-      elements.readyButton = makeElement('button', {
-        type: 'button',
-        textContent: 'Ready',
-        onclick: signifyReadiness
-      });
-    }
-
-    elements.game.appendChild(elements.readyButton);
-  }
 });
 
 socket.on('start-hand', function(_GameState) {
@@ -115,6 +103,8 @@ socket.on('start-hand', function(_GameState) {
   renderHand();
   renderPot();
   renderPlayersBar();
+
+  elements.stack.textContent = GameState.players[playerIndex].stack;
 
   if (GameState.actionIndex === playerIndex) {
     renderRaiseForm();
@@ -194,8 +184,7 @@ socket.on('big-blind-option', function(_GameState) {
 socket.on('next-street', function(_GameState, isAllin) {
   GameState = _GameState;
 
-  // If it is the flop
-  if (GameState.streetIndex === 1) renderBoard();
+  if (GameState.street === Street.FLOP) renderBoard();
   else appendCardToBoard();
 
   if (isAllin) return;
@@ -227,6 +216,7 @@ socket.on('hand-finished', function(_GameState) {
   if (!elements.hasOwnProperty('handOver')) {
     elements.handOver = makeElement('p');
   }
+
   if (GameState.winnerIndexes.length === 1) {
     elements.handOver.textContent = 'Hand finished. '
       + GameState.players[GameState.winnerIndexes[0]].username
@@ -266,7 +256,7 @@ function renderGame() {
 
   appendChildren(elements.game, [elements.player, elements.stack]);
 
-  if (GameState.statusIndex === 0) {
+  if (GameState.status === Status.LOBBY) {
     if (GameState.players.length >= 2) {
       if (GameState.players[playerIndex].stack > 0) {
         // Another if statement here so that ready waiting text
@@ -317,7 +307,7 @@ function renderGame() {
     renderPot();
     if (GameState.board.length > 0) renderBoard();
 
-    if (GameState.statusIndex === 1) {
+    if (GameState.status === Status.HAND) {
       renderPlayersBar();
 
       if (GameState.actionIndex === playerIndex) {
@@ -329,22 +319,19 @@ function renderGame() {
 
         // HACK: This condition will only work if playing heads-up.
         // Temporary hack until side-pots are implemented.
-        var actions = GameState.actions[STREETS[GameState.streetIndex]];
+        var actions = GameState.actions[GameState.street];
         var len = actions.length;
         if (numPlayersNotAllin <= 1 && len && actions[len - 1].type === 'call') {
           // Do nothing.
         } else {
-          // TODO: Cleanup
-          if ((GameState.actions[STREETS[GameState.streetIndex]].length
-              && GameState.actions[STREETS[GameState.streetIndex]].every(a => a.type === 'check'))
-            || isBigBlindOption()) {
+          if (!actions.length || actions.every(a => a.type === 'check') || isBigBlindOption()) {
             renderBetForm();
           } else {
             renderRaiseForm();
           }
         }
       }
-    } else if (GameState.statusIndex === 2) {
+    } else if (GameState.status === Status.FINISHED) {
       if (!elements.hasOwnProperty('handOver')) {
         elements.handOver = makeElement('p');
       }
@@ -379,7 +366,7 @@ function renderPlayersBar() {
   for (var i = 0; i < GameState.players.length; i++) {
     playerItem = makeElement('span');
 
-    if (i === GameState.actionIndex && GameState.statusIndex !== 2) {
+    if (i === GameState.actionIndex && GameState.status !== Status.FINISHED) {
       playerItem.className = 'player-item-has-action';
     } else if (GameState.players[i].folded) {
       playerItem.className = 'player-item-folded';
@@ -402,7 +389,7 @@ function renderPlayersBar() {
 
 function updatePlayersBar() {
   for (var i = 0; i < GameState.players.length; i++) {
-    if (i === GameState.actionIndex && GameState.statusIndex !== 2) {
+    if (i === GameState.actionIndex && GameState.status !== Status.FINISHED) {
       elements.playersBar.children[i].className = 'player-item-has-action';
     } else if (GameState.players[i].folded) {
       elements.playersBar.children[i].className = 'player-item-folded';
@@ -527,9 +514,10 @@ function calculateAmountToCall() {
   // Sum up all bets from player. Difference between 'currentBet' and 'myBet'
   // is the amount required to call.
   var myBetTotal = 0;
-  for (var a of GameState.actions[STREETS[GameState.streetIndex]]) {
-    if (a.playerIndex === playerIndex && a.amount) {
-      myBetTotal += a.amount
+  var actions = GameState.actions[GameState.street];
+  for (var i = 0; i < actions.length; i++) {
+    if (actions[i].playerIndex === playerIndex && actions[i].amount) {
+      myBetTotal += actions[i].amount;
     }
   }
 
@@ -543,7 +531,7 @@ function calculateAmountToCall() {
 }
 
 function isBigBlindOption() {
-  return GameState.streetIndex === 0
+  return GameState.street === Street.PRE_FLOP
     && GameState.actionIndex === GameState.bigBlindIndex
     && GameState.currentBetTotal === 100; // <-- big blind
 }
@@ -585,6 +573,18 @@ function signifyReadiness() {
 
 function onTopOffClick() {
   socket.emit('top-off', playerIndex);
+
+  elements.game.removeChild(elements.topOffButton);
+
+  if (!elements.hasOwnProperty('readyButton')) {
+    elements.readyButton = makeElement('button', {
+      type: 'button',
+      textContent: 'Ready',
+      onclick: signifyReadiness
+    });
+  }
+
+  elements.game.appendChild(elements.readyButton);
 }
 
 function onBetSubmit(event) {
