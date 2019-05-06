@@ -10,7 +10,19 @@ html, body {
   height: 100%;
 }
 
+.game {
+  display: block;
+}
+
 .pot {
+  /* TODO */
+}
+
+.player {
+  /* TODO */
+}
+
+.stack {
   /* TODO */
 }
 

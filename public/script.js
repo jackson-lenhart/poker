@@ -1,231 +1,324 @@
-(function() {
-  'use strict';
+'use strict';
 
-  /* GLOBALS */
+/* GLOBALS */
 
-  var username = localStorage.getItem('username');
-  var GameState;
-  var playerIndex;
-  var STREETS = ['PRE-FLOP', 'FLOP', 'TURN', 'RIVER'];
+var username = localStorage.getItem('username');
+var GameState;
+var playerIndex;
+var STREETS = ['PRE-FLOP', 'FLOP', 'TURN', 'RIVER'];
 
-  /* COMPONENTS */
+var elements = {
+  root: makeElement('div', { className: 'container' }),
+  joinForm: makeElement('form', {
+    onsubmit: onJoinSubmit
+  })
+};
 
-  var container;
+elements.usernameInputField = makeElement('input', {
+  type: 'text',
+  name: 'username'
+});
 
-  // Loading spinner
-  var spinner = document.createElement('div');
-  spinner.id = 'spinner';
-  var spinnerText = document.createTextNode('Loading...');
-  spinner.appendChild(spinnerText);
+appendChildren(elements.joinForm, [
+  makeElement('label', {
+    htmlFor: 'username',
+    textContent: 'Username:'
+  }),
+  elements.usernameInputField
+]);
 
-  // Join form
-  var joinForm = document.createElement('form');
-  joinForm.id = 'join-form';
-  // join function defined below
-  joinForm.onsubmit = join;
+// The whole thing relies on socket connection.
+var socket = io();
 
-  var usernameLabel = document.createElement('label');
-  usernameLabel.htmlFor = 'username';
-  usernameLabel.textContent = 'Username:';
+socket.on('connect', function() {
+  username = localStorage.getItem('username');
+  if (username) {
+    socket.emit('gateway', username);
+  } else {
+    elements.root.appendChild(elements.joinForm);
+    clearBody();
+    document.body.appendChild(elements.root);
+  }
+});
 
-  var usernameField = document.createElement('input');
-  usernameField.type = 'text';
-  usernameField.name = 'username';
-  usernameField.id = 'username';
+socket.on('join-success', function(_GameState, _playerIndex) {
+  GameState = _GameState;
+  playerIndex = _playerIndex;
 
-  joinForm.appendChild(usernameLabel);
-  joinForm.appendChild(usernameField);
+  renderGame();
 
-  // Game
-  var game = document.createElement('div');
-  game.id = 'game';
+  localStorage.setItem('username', GameState.players[playerIndex].username);
+});
 
-  // Ready button (player clicks to signify ready to begin new hand)
-  var readyButton = document.createElement('button');
-  readyButton.type = 'button';
-  readyButton.textContent = 'Ready';
-  readyButton.onclick = signifyReadiness;
+socket.on('join-failure', function(msg) {
+  alert(msg);
+  elements.root.appendChild(elements.joinForm);
+});
 
-  // Top off button
-  var topOffButton = document.createElement('button');
-  topOffButton.type = 'button';
-  topOffButton.textContent = 'Top off';
-  topOffButton.onclick = topOff;
+socket.on('join', function(_GameState) {
+  GameState = _GameState;
 
-  // Pot
-  var potContainer = document.createElement('div');
-  potContainer.className = 'pot';
-  var potTextElement = document.createElement('h2');
-  potContainer.appendChild(potTextElement);
+  // Render Ready button if we just got our first opponent
+  if (GameState.players.length === 2) {
+    elements.game.removeChild(elements.waiting);
 
-  // Hand
-  var handContainer = document.createElement('div');
-
-  // Stack
-  var stack = document.createElement('div');
-  stack.id = 'stack';
-
-  // Players bar
-  var playersBar = document.createElement('div');
-
-  // The board
-  var boardContainer = document.createElement('div');
-
-  // Bet text
-  var betText = document.createElement('p');
-
-  // Bet/check form
-  var betForm = document.createElement('form');
-  betForm.onsubmit = bet;
-
-  var betInputLabel = document.createElement('label');
-  betInputLabel.htmlFor = 'bet';
-  betInputLabel.textContent = 'Bet amount:';
-
-  var betInputField = document.createElement('input');
-  betInputField.type = 'text';
-  betInputField.name = 'bet';
-  betInputField.id = 'bet';
-
-  var betButton = document.createElement('button');
-  betButton.type = 'submit';
-  betButton.textContent = 'Bet';
-
-  var checkButton = document.createElement('button');
-  checkButton.type = 'button';
-  checkButton.onclick = check;
-  checkButton.textContent = 'Check';
-
-  var betAllinButton = document.createElement('button');
-  betAllinButton.type = 'button';
-  betAllinButton.onclick = allin.bind(null, 'bet');
-  betAllinButton.textContent = 'All in';
-
-  betForm.appendChild(betInputLabel);
-  betForm.appendChild(betInputField);
-  betForm.appendChild(betButton);
-  betForm.appendChild(checkButton);
-  betForm.appendChild(betAllinButton);
-
-  // Raise/fold form
-  var raiseForm = document.createElement('form');
-  raiseForm.id = 'raise-form';
-  raiseForm.onsubmit = raise;
-
-  var raiseInputLabel = document.createElement('label');
-  raiseInputLabel.htmlFor = 'raise';
-  raiseInputLabel.textContent = 'Raise:';
-
-  var raiseInputField = document.createElement('input');
-  raiseInputField.type = 'text';
-  raiseInputField.name = 'raise';
-  raiseInputField.id = 'raise';
-
-  var raiseButton = document.createElement('button');
-  raiseButton.type = 'submit';
-  raiseButton.textContent = 'Raise';
-
-  var callButton = document.createElement('button');
-  callButton.type = 'button';
-  callButton.onclick = call;
-  callButton.textContent = 'Call';
-
-  var foldButton = document.createElement('button');
-  foldButton.type = 'button';
-  foldButton.onclick = fold;
-  foldButton.textContent = 'Fold';
-
-  var raiseAllinButton = document.createElement('button');
-  raiseAllinButton.type = 'button';
-  raiseAllinButton.onclick = allin.bind(null, 'raise');
-  raiseAllinButton.textContent = 'All in';
-
-  raiseForm.appendChild(raiseInputLabel);
-  raiseForm.appendChild(raiseInputField);
-  raiseForm.appendChild(raiseButton);
-  raiseForm.appendChild(callButton);
-  raiseForm.appendChild(foldButton);
-  raiseForm.appendChild(raiseAllinButton);
-
-  var handOverDisplay = document.createElement('div');
-
-  var divider = document.createElement('hr');
-  divider.id = 'divider';
-
-  // Waiting text (this probably shouldn't be global but w/e)
-  var waitingText = document.createTextNode('Waiting for others to join...');
-  var readyWaitingText = document.createTextNode('Waiting for others to signify readiness');
-
-  var playerText = document.createTextNode('You');
-
-  window.onload = function() {
-    // Our main container where we dynamically inject html
-    container = document.getElementById('container');
-    container.appendChild(spinner);
-  };
-
-  // The whole thing relies on socket connection.
-  var socket = io();
-
-  socket.on('connect', function() {
-    username = localStorage.getItem('username');
-    if (username) {
-      socket.emit('gateway', username);
-    } else {
-      container.removeChild(spinner);
-      container.appendChild(joinForm);
+    if (!elements.hasOwnProperty('readyButton')) {
+      elements.readyButton = makeElement('button', {
+        type: 'button',
+        textContent: 'Ready',
+        onclick: signifyReadiness
+      });
     }
-  });
 
-  socket.on('join-success', function(joinData) {
-    GameState = joinData.GameState;
-    playerIndex = joinData.playerIndex;
+    elements.game.appendChild(elements.readyButton);
+  }
+});
 
-    initGame();
+socket.on('gateway-success', function(_GameState, _playerIndex) {
+  GameState = _GameState;
+  playerIndex = _playerIndex;
 
-    localStorage.setItem('username', GameState.players[playerIndex].username);
-  });
+  renderGame();
+});
 
-  socket.on('join-failure', function(msg) {
-    alert(msg);
-    container.removeChild(spinner);
-    container.appendChild(joinForm);
-  });
+socket.on('gateway-failure', function(gatewayFailureData) {
+  elements.root.appendChild(elements.joinForm);
+  localStorage.removeItem('username');
+});
 
-  socket.on('join', function(_GameState) {
-    GameState = _GameState;
-    // Render Ready button if we just got our first opponent
-    if (GameState.players.length === 2) {
-      if (waitingText.parentNode === game) game.removeChild(waitingText);
-      game.appendChild(readyButton);
+socket.on('top-off', function(_GameState) {
+  GameState = _GameState;
+
+  elements.stack.textContent = GameState.players[playerIndex].stack;
+  elements.game.removeChild(elements.topOffButton);
+  if (!elements.game.contains(elements.readyButton)) {
+    if (!elements.hasOwnProperty('readyButton')) {
+      elements.readyButton = makeElement('button', {
+        type: 'button',
+        textContent: 'Ready',
+        onclick: signifyReadiness
+      });
     }
+
+    elements.game.appendChild(elements.readyButton);
+  }
+});
+
+socket.on('start-hand', function(_GameState) {
+  GameState = _GameState;
+
+  elements.game.removeChild(elements.readyWaiting);
+  if (elements.game.contains(elements.topOffButton)){
+    elements.game.removeChild(elements.topOffButton);
+  }
+
+  renderHand();
+  renderPot();
+  renderPlayersBar();
+
+  if (GameState.actionIndex === playerIndex) {
+    renderRaiseForm();
+  }
+});
+
+socket.on('raise', function(_GameState) {
+  GameState = _GameState;
+
+  updatePot();
+  updatePlayersBar();
+  elements.stack.textContent = GameState.players[playerIndex].stack;
+
+  if (GameState.actionIndex === playerIndex) {
+    renderRaiseForm();
+  }
+});
+
+socket.on('call', function(_GameState, isAllin) {
+  GameState = _GameState;
+
+  updatePot();
+  updatePlayersBar();
+  elements.stack.textContent = GameState.players[playerIndex].stack;
+
+  if (isAllin) {
+    // Do nothing.
+  } else if (GameState.actionIndex === playerIndex) {
+    if (isBigBlindOption()) renderBetForm();
+    else renderRaiseForm();
+  }
+});
+
+socket.on('check', function(_GameState) {
+  GameState = _GameState;
+
+  updatePlayersBar();
+  if (playerIndex === GameState.actionIndex) {
+    renderBetForm();
+  }
+});
+
+// TODO: Add handling for 'isAllin'
+socket.on('bet', function(_GameState) {
+  GameState = _GameState;
+
+  updatePot();
+  updatePlayersBar();
+  elements.stack.textContent = GameState.players[playerIndex].stack;
+
+  if (GameState.actionIndex === playerIndex) {
+    renderRaiseForm();
+  }
+});
+
+socket.on('fold', function(_GameState) {
+  GameState = _GameState;
+
+  updatePlayersBar();
+  if (playerIndex === GameState.actionIndex) {
+    renderRaiseForm();
+  }
+});
+
+socket.on('big-blind-option', function(_GameState) {
+  GameState = _GameState;
+
+  updatePot();
+  updatePlayersBar();
+  elements.stack.textContent = GameState.players[playerIndex].stack;
+
+  if (playerIndex === GameState.bigBlindIndex) {
+    renderBetForm();
+  }
+});
+
+socket.on('next-street', function(_GameState, isAllin) {
+  GameState = _GameState;
+
+  // If it is the flop
+  if (GameState.streetIndex === 1) renderBoard();
+  else appendCardToBoard();
+
+  if (isAllin) return;
+
+  updatePot();
+  updatePlayersBar();
+  elements.stack.textContent = GameState.players[playerIndex].stack;
+
+  if (GameState.actionIndex === playerIndex) {
+    renderBetForm();
+  }
+});
+
+socket.on('resolve-effective-stacks', function(_GameState) {
+  GameState = _GameState;
+
+  updatePot();
+  updatePlayersBar();
+  elements.stack.textContent = GameState.players[playerIndex].stack;
+});
+
+socket.on('hand-finished', function(_GameState) {
+  GameState = _GameState;
+
+  updatePot();
+  updatePlayersBar();
+  elements.stack.textContent = GameState.players[playerIndex].stack;
+
+  if (!elements.hasOwnProperty('handOver')) {
+    elements.handOver = makeElement('p');
+  }
+  if (GameState.winnerIndexes.length === 1) {
+    elements.handOver.textContent = 'Hand finished. '
+      + GameState.players[GameState.winnerIndexes[0]].username
+      + ' wins ' + GameState.pot + '.';
+  } else {
+    // TODO: Make this actually into a formatted string/sentence with all
+    // players' usernames who split the pot.
+    elements.handOver.textContent = 'Split pot.';
+  }
+
+  elements.game.prepend(elements.handOver);
+});
+
+socket.on('reset', function(_GameState) {
+  GameState = _GameState;
+  renderGame();
+});
+
+/* Rendering/game logic procedures */
+
+function renderGame() {
+  if (!elements.hasOwnProperty('game')) {
+    elements.game = makeElement('div', { className: 'game' });
+  } else {
+    clearElement(elements.game);
+  }
+
+  elements.player = makeElement('p', {
+    className: 'player',
+    textContent: 'You'
   });
 
-  socket.on('gateway-success', function(gatewayData) {
-    GameState = gatewayData.GameState;
-    playerIndex = gatewayData.playerIndex;
+  elements.stack = makeElement('p', {
+    className: 'stack',
+    textContent: GameState.players[playerIndex].stack
+  });
 
-    if (GameState.statusIndex === 0) {
-      if (GameState.players[playerIndex].ready) {
-        game.appendChild(playerText);
+  appendChildren(elements.game, [elements.player, elements.stack]);
 
-        var br = document.createElement('br');
-        game.appendChild(br);
+  if (GameState.statusIndex === 0) {
+    if (GameState.players.length >= 2) {
+      if (GameState.players[playerIndex].stack > 0) {
+        // Another if statement here so that ready waiting text
+        // shows if player has already signified readiness.
+        if (GameState.players[playerIndex].ready) {
+          if (!elements.hasOwnProperty('readyWaiting')) {
+            elements.readyWaiting = makeElement('p', {
+              textContent: 'Waiting for others to signify readiness...'
+            });
+          }
 
-        stack.textContent = GameState.players[playerIndex].stack;
-        game.appendChild(stack);
+          elements.game.appendChild(elements.readyWaiting);
+        } else {
+          if (!elements.hasOwnProperty('readyButton')) {
+            elements.readyButton = makeElement('button', {
+              type: 'button',
+              textContent: 'Ready',
+              onclick: signifyReadiness
+            });
+          }
 
-        game.appendChild(readyWaitingText);
-
-        container.removeChild(spinner);
-        container.appendChild(game);
-      } else {
-        initGame();
+          elements.game.appendChild(elements.readyButton);
+        }
       }
-    } else if (GameState.statusIndex === 1) {
-      // We are in a hand.
-      game.appendChild(divider);
-      game.appendChild(playerText);
+    } else {
+      if (!elements.hasOwnProperty('waiting')) {
+        elements.waiting = makeElement('p', {
+          textContent: 'Waiting for others to join...'
+        });
+      }
+
+      elements.game.appendChild(elements.waiting);
+    }
+
+    if (GameState.players[playerIndex].stack < 10000) {
+      if (!elements.hasOwnProperty('topOffButton')) {
+        elements.topOffButton = makeElement('button', {
+          type: 'button',
+          textContent: 'Top off',
+          onclick: onTopOffClick
+        });
+      }
+
+      elements.game.appendChild(elements.topOffButton);
+    }
+  } else {
+    renderHand();
+    renderPot();
+    if (GameState.board.length > 0) renderBoard();
+
+    if (GameState.statusIndex === 1) {
+      renderPlayersBar();
 
       if (GameState.actionIndex === playerIndex) {
         // Check if 1 or fewer players are left without their chips all-in
@@ -236,552 +329,336 @@
 
         // HACK: This condition will only work if playing heads-up.
         // Temporary hack until side-pots are implemented.
-        // debugger;
         var actions = GameState.actions[STREETS[GameState.streetIndex]];
         var len = actions.length;
-        if (numPlayersNotAllin <= 1 && actions[len - 1].type === 'call') {
+        if (numPlayersNotAllin <= 1 && len && actions[len - 1].type === 'call') {
           // Do nothing.
         } else {
-          renderBetOrRaiseForm();
+          // TODO: Cleanup
+          if ((GameState.actions[STREETS[GameState.streetIndex]].length
+              && GameState.actions[STREETS[GameState.streetIndex]].every(a => a.type === 'check'))
+            || isBigBlindOption()) {
+            renderBetForm();
+          } else {
+            renderRaiseForm();
+          }
         }
       }
-
-      var br = document.createElement('br');
-      game.appendChild(br);
-
-      stack.textContent = GameState.players[playerIndex].stack;
-      game.appendChild(stack);
-
-      // Render hand
-      renderHand();
-      game.prepend(handContainer);
-
-      // Render pot
-      potTextElement.textContent = 'Pot: ' + GameState.pot;
-      game.prepend(potContainer);
-
-      // Render board
-      if (GameState.board.length > 0) {
-        renderBoard();
-        game.prepend(boardContainer);
-      }
-
-      updatePlayersBar();
-      game.prepend(playersBar);
-
-      container.removeChild(spinner);
-      container.appendChild(game);
     } else if (GameState.statusIndex === 2) {
-      // We are in the 'finished' stage (within 4 seconds of someone winning a hand).
-      game.appendChild(divider);
-      game.appendChild(playerText);
+      if (!elements.hasOwnProperty('handOver')) {
+        elements.handOver = makeElement('p');
+      }
 
-      var br = document.createElement('br');
-      game.appendChild(br);
-
-      stack.textContent = GameState.players[playerIndex].stack;
-      game.appendChild(stack);
-
-      // Render hand
-      renderHand();
-      game.prepend(handContainer);
-
-      // Render pot
-      potTextElement.textContent = 'Pot: ' + GameState.pot;
-      game.prepend(potContainer);
-
-      renderBoard();
-      game.prepend(boardContainer);
-
-      updatePlayersBar();
-      game.prepend(playersBar);
-
-      var handOverText;
       if (GameState.winnerIndexes.length === 1) {
-        handOverText = document.createTextNode(
-          'Hand finished. ' + GameState.players[GameState.winnerIndexes[0]].username
-          + ' wins ' + GameState.pot + '.'
-        )
+        elements.handOver.textContent = 'Hand finished. '
+          + GameState.players[GameState.winnerIndexes[0]].username
+          + ' wins ' + GameState.pot + '.';
       } else {
-        handOverText = document.createTextNode('Tie.');
+        elements.handOver.textContent = 'Split pot.';
       }
 
-      handOverDisplay.appendChild(handOverText);
-      game.prepend(handOverDisplay);
-
-      container.removeChild(spinner);
-      container.appendChild(game);
+      elements.game.prepend(elements.handOver);
     }
-  });
+  }
 
-  socket.on('gateway-failure', function(gatewayFailureData) {
-    container.removeChild(spinner);
-    container.appendChild(joinForm);
-    localStorage.removeItem('username');
+  elements.root.appendChild(elements.game);
 
-    console.log('Gateway failure:', gatewayFailureData.msg);
-  });
+  clearBody();
+  document.body.appendChild(elements.root);
+}
 
-  socket.on('top-off', function(_GameState) {
-    GameState = _GameState;
+function renderPlayersBar() {
+  if (!elements.hasOwnProperty('playersBar')) {
+    elements.playersBar = makeElement('div');
+  } else {
+    clearElement(elements.playersBar);
+  }
 
-    stack.textContent = GameState.players[playerIndex].stack;
-    game.removeChild(topOffButton);
-    if (!game.contains(readyButton)) game.appendChild(readyButton);
-  });
+  var fragment = document.createDocumentFragment();
+  var playerItem;
+  for (var i = 0; i < GameState.players.length; i++) {
+    playerItem = makeElement('span');
 
-  socket.on('start-hand', function(_GameState) {
-    GameState = _GameState;
-
-    game.prepend(divider);
-
-    // Render bet/check or raise/call/fold input if action is on us
-    if (GameState.actionIndex === playerIndex) {
-      renderBetOrRaiseForm();
-    }
-
-    // Render hand
-    renderHand();
-    game.prepend(handContainer);
-
-    // Update stack text
-    stack.textContent = GameState.players[playerIndex].stack;
-
-    // Render pot
-    potTextElement.textContent = 'Pot: ' + GameState.pot;
-    game.prepend(potContainer);
-
-    updatePlayersBar();
-    game.prepend(playersBar);
-
-    game.removeChild(readyWaitingText);
-    if (game.contains(topOffButton)) game.removeChild(topOffButton);
-  });
-
-  socket.on('raise', function(_GameState) {
-    GameState = _GameState;
-
-    // Update view
-    stack.textContent = GameState.players[playerIndex].stack;
-    potTextElement.textContent = 'Pot: ' + GameState.pot;
-    updatePlayersBar();
-
-    // Render bet/check or raise/call/fold input if action is on us
-    if (GameState.actionIndex === playerIndex) renderBetOrRaiseForm();
-  });
-
-  socket.on('call', function(_GameState, isAllin) {
-    GameState = _GameState;
-
-    // Update view
-    potTextElement.textContent = 'Pot: ' + GameState.pot;
-    updatePlayersBar();
-    stack.textContent = GameState.players[playerIndex].stack;
-
-    if (isAllin) {
-      // Do nothing.
-    } else if (GameState.actionIndex === playerIndex) {
-      updateBetText();
-      game.insertBefore(raiseForm, divider);
-      game.insertBefore(betText, raiseForm);
-    }
-  });
-
-  socket.on('check', function(_GameState) {
-    GameState = _GameState;
-
-    updatePlayersBar();
-    if (playerIndex === GameState.actionIndex) {
-      game.insertBefore(betForm, divider);
-    }
-  });
-
-  socket.on('bet', function(_GameState) {
-    GameState = _GameState;
-
-    // Update view
-    potTextElement.textContent = 'Pot: ' + GameState.pot;
-    updatePlayersBar();
-    stack.textContent = GameState.players[playerIndex].stack;
-
-    if (GameState.actionIndex === playerIndex) {
-      updateBetText();
-      game.insertBefore(raiseForm, divider);
-      game.insertBefore(betText, raiseForm);
-    }
-  });
-
-  socket.on('fold', function(_GameState) {
-    GameState = _GameState;
-
-    updatePlayersBar();
-
-    if (playerIndex === GameState.actionIndex) {
-      updateBetText();
-      game.insertBefore(raiseForm, divider);
-      game.insertBefore(betText, raiseForm);
-    }
-  });
-
-  socket.on('big-blind-option', function(_GameState) {
-    GameState = _GameState;
-
-    // Update view
-    potTextElement.textContent = 'Pot: ' + GameState.pot;
-    updatePlayersBar();
-    stack.textContent = GameState.players[playerIndex].stack;
-
-    if (playerIndex === GameState.bigBlindIndex) {
-      game.insertBefore(betForm, divider);
-    }
-  });
-
-  socket.on('next-street', function(_GameState, isAllin) {
-    GameState = _GameState;
-
-    // If it is the flop
-    if (GameState.streetIndex === 1) renderBoard();
-    else appendCardToBoard();
-
-    // If we haven't inserted the board into the view yet.
-    if (!game.contains(boardContainer)) {
-      game.insertBefore(boardContainer, potContainer);
-    }
-
-    if (isAllin) return;
-
-    potTextElement.textContent = 'Pot: ' + GameState.pot;
-    updatePlayersBar();
-    stack.textContent = GameState.players[playerIndex].stack;
-
-    if (GameState.actionIndex === playerIndex) {
-      game.insertBefore(betForm, divider);
-    }
-  });
-
-  socket.on('resolve-effective-stacks', function(_GameState) {
-    GameState = _GameState;
-
-    potTextElement.textContent = 'Pot: ' + GameState.pot;
-    updatePlayersBar();
-    stack.textContent = GameState.players[playerIndex].stack;
-  });
-
-  socket.on('hand-finished', function(_GameState) {
-    GameState = _GameState;
-
-    potTextElement.textContent = 'Pot: ' + GameState.pot;
-    updatePlayersBar();
-    stack.textContent = GameState.players[playerIndex].stack;
-
-    var handOverText;
-    if (GameState.winnerIndexes.length === 1) {
-      handOverText = document.createTextNode(
-        'Hand finished. ' + GameState.players[GameState.winnerIndexes[0]].username
-        + ' wins ' + GameState.pot + '.'
-      );
+    if (i === GameState.actionIndex && GameState.statusIndex !== 2) {
+      playerItem.className = 'player-item-has-action';
+    } else if (GameState.players[i].folded) {
+      playerItem.className = 'player-item-folded';
     } else {
-      // TODO: Make this actually into a formatted string/sentence with all
-      // players' usernames who split the pot.
-      handOverText = document.createTextNode('Split pot.');
+      playerItem.className = 'player-item';
     }
 
-    handOverDisplay.appendChild(handOverText);
-    game.prepend(handOverDisplay);
-  });
-
-  socket.on('reset', function(_GameState) {
-    GameState = _GameState;
-
-    handOverDisplay.removeChild(handOverDisplay.firstChild);
-    container.removeChild(game);
-    container.appendChild(spinner);
-    while (game.firstChild) game.removeChild(game.firstChild);
-
-    initGame();
-  });
-
-  function join(event) {
-    event.preventDefault();
-
-    var container = document.getElementById('container');
-
-    var usernameInput = document.getElementById('username');
-    var username = usernameInput.value;
-
-    if (username === '') {
-      usernameInput.style.color = 'red';
-      alert('Error: please enter a username');
-      return;
-    }
-
-    container.removeChild(joinForm);
-    container.appendChild(spinner);
-
-    socket.emit('join', username);
-  }
-
-  // If player has just refreshed the page and has not signified readiness,
-  // or if player has just logged in, this will be called.
-  function initGame() {
-    game.appendChild(playerText);
-
-    var br = document.createElement('br');
-    game.appendChild(br);
-
-    stack.textContent = GameState.players[playerIndex].stack;
-    game.appendChild(stack);
-
-    if (GameState.players.length >= 2) {
-      if (GameState.players[playerIndex].stack > 0) game.appendChild(readyButton);
+    if (i === playerIndex) {
+      playerItem.textContent = 'You';
     } else {
-      game.appendChild(waitingText);
+      playerItem.textContent = GameState.players[i].username + ': ' + GameState.players[i].stack;
     }
 
-    if (GameState.players[playerIndex].stack < 10000) game.appendChild(topOffButton);
-
-    container.removeChild(spinner);
-    container.appendChild(game);
+    fragment.appendChild(playerItem);
   }
 
-  function signifyReadiness() {
-    game.removeChild(readyButton);
-    game.appendChild(readyWaitingText);
-    if (game.contains(topOffButton)) game.removeChild(topOffButton);
+  elements.playersBar.appendChild(fragment);
+  elements.game.prepend(elements.playersBar);
+}
 
-    socket.emit('ready', playerIndex);
-  }
-
-  function topOff() {
-    socket.emit('top-off', playerIndex);
-  }
-
-  function renderBetOrRaiseForm() {
-    if (GameState.actions[STREETS[GameState.streetIndex]].every(a => a.type === 'check')
-      || isBigBlindOption()
-    ) {
-      game.prepend(betForm);
+function updatePlayersBar() {
+  for (var i = 0; i < GameState.players.length; i++) {
+    if (i === GameState.actionIndex && GameState.statusIndex !== 2) {
+      elements.playersBar.children[i].className = 'player-item-has-action';
+    } else if (GameState.players[i].folded) {
+      elements.playersBar.children[i].className = 'player-item-folded';
     } else {
-      updateBetText();
-      game.insertBefore(raiseForm, divider);
-      game.insertBefore(betText, raiseForm);
+      elements.playersBar.children[i].className = 'player-item';
+    }
+  }
+}
+
+function updateBetText() {
+  var betTotal = GameState.currentBetTotal;
+  var amountToCall = calculateAmountToCall();
+
+  betText.textContent = 'Bet is ' + betTotal + ', ' + amountToCall + ' to call.';
+}
+
+function renderPot() {
+  elements.pot = makeElement('div', { className: 'pot' });
+  elements.pot.appendChild(makeElement('h2', {
+    textContent: 'Pot: ' + GameState.pot
+  }));
+
+  elements.game.prepend(elements.pot);
+}
+
+function updatePot() {
+  elements.pot.children[0].textContent = 'Pot: ' + GameState.pot;
+}
+
+function renderRaiseForm() {
+  if (!elements.hasOwnProperty('raiseForm')) {
+    elements.raiseForm = makeElement('form', { onsubmit: onRaiseSubmit });
+
+    elements.raiseInputField = makeElement('input', {
+      type: 'text',
+      name: 'raise'
+    });
+
+    appendChildren(elements.raiseForm, [
+      makeElement('label', { htmlFor: 'raise', textContent: 'Raise:' }),
+      elements.raiseInputField,
+      makeElement('button', { type: 'submit', textContent: 'Raise' }),
+      makeElement('button', { type: 'button', onclick: onCallClick, textContent: 'Call' }),
+      makeElement('button', { type: 'button', onclick: onFoldClick, textContent: 'Fold' })
+    ]);
+  }
+
+  if (!elements.hasOwnProperty('betText')) {
+    elements.betText = makeElement('p');
+  }
+
+  var betTotal = GameState.currentBetTotal;
+  var amountToCall = calculateAmountToCall();
+
+  elements.betText.textContent = 'Bet is ' + betTotal + ', ' + amountToCall + ' to call.';
+
+  elements.game.insertBefore(elements.raiseForm, elements.player);
+  elements.game.insertBefore(elements.betText, elements.raiseForm);
+}
+
+function renderBetForm() {
+  if (!elements.hasOwnProperty('betForm')) {
+    elements.betForm = makeElement('form', { onsubmit: onBetSubmit });
+    elements.betInputField = makeElement('input', { type: 'text', name: 'bet' });
+
+    appendChildren(elements.betForm, [
+      makeElement('label', { htmlFor: 'bet', textContent: 'Bet amount:' }),
+      elements.betInputField,
+      makeElement('button', { type: 'submit', textContent: 'Bet' }),
+      makeElement('button', { type: 'button', onclick: onCheckClick, textContent: 'Check' })
+    ]);
+  }
+
+  elements.game.insertBefore(elements.betForm, elements.player);
+}
+
+function renderHand() {
+  if (!elements.hasOwnProperty('hand')) {
+    elements.hand = makeElement('div');
+  }
+
+  clearElement(elements.hand);
+
+  appendChildren(elements.hand, GameState.hands[playerIndex].map(card =>
+    makeElement('img', {
+      width: 80,
+      height: 120,
+      src: mapCardDataToImgSrc(card)
+    })
+  ));
+
+  elements.game.insertBefore(elements.hand, elements.player);
+}
+
+function renderBoard() {
+  if (!elements.hasOwnProperty('board')) {
+    elements.board = makeElement('div');
+  }
+
+  clearElement(elements.board);
+
+  appendChildren(elements.board, GameState.board.map(card =>
+    makeElement('img', {
+      width: 80,
+      height: 120,
+      src: mapCardDataToImgSrc(card)
+    })
+  ));
+
+  elements.game.insertBefore(elements.board, elements.hand);
+}
+
+function appendCardToBoard() {
+  elements.board.appendChild(makeElement('img', {
+    width: 80,
+    height: 120,
+    src: mapCardDataToImgSrc(GameState.board[GameState.board.length - 1])
+  }));
+}
+
+function calculateAmountToCall() {
+  // Sum up all bets from player. Difference between 'currentBet' and 'myBet'
+  // is the amount required to call.
+  var myBetTotal = 0;
+  for (var a of GameState.actions[STREETS[GameState.streetIndex]]) {
+    if (a.playerIndex === playerIndex && a.amount) {
+      myBetTotal += a.amount
     }
   }
 
-  function isBigBlindOption() {
-    return GameState.streetIndex === 0
-      && playerIndex === GameState.bigBlindIndex
-      && GameState.currentBetTotal === 100; // <-- big blind
+  const amountToCall = GameState.currentBetTotal - myBetTotal;
+  if (amountToCall > GameState.players[playerIndex].stack) {
+    // Special case for all-in to call.
+    return GameState.players[playerIndex].stack;
+  } else {
+    return amountToCall;
+  }
+}
+
+function isBigBlindOption() {
+  return GameState.streetIndex === 0
+    && GameState.actionIndex === GameState.bigBlindIndex
+    && GameState.currentBetTotal === 100; // <-- big blind
+}
+
+/* Event handlers */
+
+function onJoinSubmit() {
+  event.preventDefault();
+
+  var username = elements.usernameInputField.value;
+
+  if (username === '') {
+    elements.usernameInputField.style.color = 'red';
+    alert('Error: please enter a username');
+    return;
   }
 
-  function updatePlayersBar() {
-    // Removing the players bar if its already there.
-    // Might want to optimize this...
-    while (playersBar.firstChild) playersBar.removeChild(playersBar.firstChild);
+  elements.root.removeChild(elements.joinForm);
 
-    var playerItem;
-    for (var i = 0; i < GameState.players.length; i++) {
-      playerItem = document.createElement('span');
+  socket.emit('join', username);
+}
 
-      if (i === GameState.actionIndex && GameState.statusIndex !== 2) {
-        playerItem.className = 'player-item-has-action';
-      } else if (GameState.players[i].folded) {
-        playerItem.className = 'player-item-folded';
-      } else {
-        playerItem.className = 'player-item';
-      }
-
-      if (i === playerIndex) {
-        playerItem.textContent = 'You';
-      } else {
-        playerItem.textContent = GameState.players[i].username + ': ' + GameState.players[i].stack;
-      }
-
-      playersBar.appendChild(playerItem);
-    }
+function signifyReadiness() {
+  if (!elements.hasOwnProperty('readyWaiting')) {
+    elements.readyWaiting = makeElement('p', {
+      textContent: 'Waiting for others to signify readiness...'
+    });
   }
 
-  function updateBetText() {
-    var betTotal = GameState.currentBetTotal;
-    var amountToCall = calculateAmountToCall();
-
-    betText.textContent = 'Bet is ' + betTotal + ', ' + amountToCall + ' to call.';
+  elements.game.removeChild(elements.readyButton);
+  if (elements.game.contains(elements.topOffButton)) {
+    elements.game.removeChild(elements.topOffButton);
   }
 
-  function renderHand() {
-    // Remove existing cards if there are any.
-    while (handContainer.firstChild) handContainer.removeChild(handContainer.firstChild);
+  elements.game.appendChild(elements.readyWaiting);
 
-    var cardImage;
+  socket.emit('ready', playerIndex);
+}
 
-    // Card 1
-    cardImage = new Image(75, 150);
-    cardImage.src = mapCardDataToImgSrc(GameState.hands[playerIndex][0])
+function onTopOffClick() {
+  socket.emit('top-off', playerIndex);
+}
 
-    handContainer.appendChild(cardImage);
+function onBetSubmit(event) {
+  event.preventDefault();
 
-    // Card 2
-    cardImage = new Image(75, 150);
-    cardImage.src = mapCardDataToImgSrc(GameState.hands[playerIndex][1])
-
-    handContainer.appendChild(cardImage);
+  var amount = elements.betInputField.value;
+  if (amount === '') {
+    return;
   }
 
-  function renderBoard() {
-    // Remove existing cards if there are any.
-    while (boardContainer.firstChild) boardContainer.removeChild(boardContainer.firstChild);
-
-    var cardImage;
-    for (var i = 0; i < GameState.board.length; i++) {
-      cardImage = new Image(100, 200);
-      cardImage.src = mapCardDataToImgSrc(GameState.board[i]);
-
-      boardContainer.appendChild(cardImage);
-    }
+  if (!(/^\d+$/.test(amount))) {
+    return;
   }
 
-  function appendCardToBoard() {
-    var cardImage = new Image(100, 200);
-    cardImage.src = mapCardDataToImgSrc(GameState.board[GameState.board.length - 1]);
-
-    boardContainer.appendChild(cardImage);
+  amount = parseInt(amount, 10);
+  if (typeof amount !== 'number' || amount < 100 // <-- big blind
+    || amount > GameState.players[playerIndex].stack) {
+    return;
   }
 
-  function mapCardDataToImgSrc(card) {
-    var src = 'card-images/';
+  elements.betInputField.value = '';
+  elements.game.removeChild(elements.betForm);
 
-    if (card.value >= 2 && card.value <= 10) src += card.value;
-    else if (card.value === 11) src += 'J';
-    else if (card.value === 12) src += 'Q';
-    else if (card.value === 13) src += 'K';
-    else if (card.value === 14) src += 'A';
+  socket.emit('bet', { playerIndex: playerIndex, amount: amount });
+}
 
-    if (card.suit === 0) src += 'S';
-    else if (card.suit === 1) src += 'C';
-    else if (card.suit === 2) src += 'H';
-    else if (card.suit === 3) src += 'D';
+function onCheckClick() {
+  elements.betInputField.value = '';
+  elements.game.removeChild(elements.betForm);
 
-    src += '.png';
-    return src;
+  socket.emit('check', { playerIndex: playerIndex });
+}
+
+function onRaiseSubmit(event) {
+  event.preventDefault();
+
+  var amount = elements.raiseInputField.value
+  if (amount === '') {
+    return;
   }
 
-  function bet(event) {
-    event.preventDefault();
-
-    var amount = betInputField.value;
-    if (amount === '') {
-      return;
-    }
-
-    if (!(/^\d+$/.test(amount))) {
-      return;
-    }
-
-    amount = parseInt(amount, 10);
-    if (typeof amount !== 'number' || amount < 100 // <-- big blind
-      || amount > GameState.players[playerIndex].stack) {
-      return;
-    }
-
-    betInputField.value = '';
-    game.removeChild(betForm);
-
-    socket.emit('bet', { playerIndex: playerIndex, amount: amount });
+  if (!(/^\d+$/.test(amount))) {
+    return;
   }
 
-  function allin(allinType) {
-    if (allinType === 'bet') {
-      betInputField.value = '';
-      game.removeChild(betForm);
-
-      socket.emit('bet', {
-        playerIndex: playerIndex,
-        amount: GameState.players[playerIndex].stack
-      });
-    } else if (allinType == 'raise') {
-      raiseInputField.value = '';
-      game.removeChild(raiseForm);
-      game.removeChild(betText);
-
-      socket.emit('raise', {
-        playerIndex: playerIndex,
-        amount: GameState.players[playerIndex].stack
-      });
-    } else {
-      throw new Error('Invalid allinType passed to allin:', allinType);
-    }
+  amount = parseInt(amount, 10);
+  // This will not catch a particular illegal small blind vs big blind raise yet.
+  if (typeof amount !== 'number' || amount < 100 || amount < calculateAmountToCall() * 2) {
+    return;
   }
 
-  function check() {
-    event.preventDefault();
-
-    betInputField.value = '';
-    game.removeChild(betForm);
-
-    socket.emit('check', { playerIndex: playerIndex });
+  if (amount > GameState.players[playerIndex].stack) {
+    return;
   }
 
-  function raise(event) {
-    event.preventDefault();
+  elements.raiseInputField.value = '';
+  elements.game.removeChild(elements.raiseForm);
+  elements.game.removeChild(elements.betText);
 
-    var amount = raiseInputField.value
-    if (amount === '') {
-      return;
-    }
+  socket.emit('raise', { amount: amount, playerIndex: playerIndex });
+}
 
-    if (!(/^\d+$/.test(amount))) {
-      return;
-    }
+function onCallClick() {
+  var amountToCall = calculateAmountToCall();
+  socket.emit('call', { playerIndex: playerIndex, amountToCall: amountToCall });
 
-    amount = parseInt(amount, 10);
-    // This will not catch a particular illegal small blind vs big blind raise yet.
-    if (typeof amount !== 'number' || amount < 100 || amount < calculateAmountToCall() * 2) {
-      return;
-    }
+  elements.game.removeChild(elements.raiseForm);
+  elements.game.removeChild(elements.betText);
+}
 
-    if (amount > GameState.players[playerIndex].stack) {
-      return;
-    }
+function onFoldClick() {
+  elements.game.removeChild(elements.raiseForm);
+  elements.game.removeChild(elements.betText);
+  elements.game.removeChild(elements.hand);
 
-    raiseInputField.value = '';
-    game.removeChild(raiseForm);
-    game.removeChild(betText);
-
-    socket.emit('raise', { amount: amount, playerIndex: playerIndex });
-  }
-
-  function call() {
-    var amountToCall = calculateAmountToCall();
-    socket.emit('call', { playerIndex: playerIndex, amountToCall: amountToCall });
-
-    game.removeChild(raiseForm);
-    game.removeChild(betText);
-  }
-
-  function fold() {
-    game.removeChild(raiseForm);
-    game.removeChild(betText);
-    game.removeChild(handContainer);
-
-    socket.emit('fold', { playerIndex: playerIndex });
-  }
-
-  function calculateAmountToCall() {
-    // Sum up all bets from player. Difference between 'currentBet' and 'myBet'
-    // is the amount required to call.
-    var myBetTotal = 0;
-    for (var a of GameState.actions[STREETS[GameState.streetIndex]]) {
-      if (a.playerIndex === playerIndex && a.amount) {
-        myBetTotal += a.amount
-      }
-    }
-
-    const amountToCall = GameState.currentBetTotal - myBetTotal;
-    if (amountToCall > GameState.players[playerIndex].stack) {
-      // Special case for all-in to call.
-      return GameState.players[playerIndex].stack;
-    } else {
-      return amountToCall;
-    }
-  }
-})();
+  socket.emit('fold', { playerIndex: playerIndex });
+}

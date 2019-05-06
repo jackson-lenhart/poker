@@ -77,12 +77,7 @@ io.on('connection', function(client) {
       // and indexes will match.
       GameState.hands.push(null);
 
-      client.emit('join-success', {
-        GameState,
-        username,
-        playerIndex: GameState.players.length - 1
-      });
-
+      client.emit('join-success', GameState, GameState.players.length - 1)
       client.broadcast.emit('join', GameState);
     }
   });
@@ -96,7 +91,7 @@ io.on('connection', function(client) {
       if (GameState.players[i].username === username) {
         client.username = username;
 
-        client.emit('gateway-success', { GameState, playerIndex: i });
+        client.emit('gateway-success', GameState, i);
         return;
       }
     }
@@ -178,7 +173,6 @@ io.on('connection', function(client) {
   });
 
   client.on('call', function({ playerIndex, amountToCall }) {
-    debugger;
     if (amountToCall >= GameState.players[playerIndex].stack) {
       // Calling all in.
       amountToCall = GameState.players[playerIndex].stack;
