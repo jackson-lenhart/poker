@@ -27,6 +27,8 @@ appendChildren(elements.joinForm, [
   elements.usernameInputField
 ]);
 
+elements.actionsContainer = makeElement('div', { className: 'actions-container' });
+
 // The whole thing relies on socket connection.
 var socket = io();
 
@@ -35,7 +37,9 @@ socket.on('connect', function() {
   if (username) {
     socket.emit('gateway', username);
   } else {
+    clearElement(elements.root);
     elements.root.appendChild(elements.joinForm);
+
     clearBody();
     document.body.appendChild(elements.root);
   }
@@ -82,14 +86,19 @@ socket.on('gateway-success', function(_GameState, _playerIndex) {
 });
 
 socket.on('gateway-failure', function(gatewayFailureData) {
-  elements.root.appendChild(elements.joinForm);
   localStorage.removeItem('username');
+
+  clearElement(elements.root);
+  elements.root.appendChild(elements.joinForm);
+
+  clearBody();
+  document.body.appendChild(elements.root);
 });
 
 socket.on('top-off', function(_GameState) {
   GameState = _GameState;
 
-  elements.stack.textContent = GameState.players[playerIndex].stack;
+  updateStack();
 });
 
 socket.on('start-hand', function(_GameState) {
@@ -104,38 +113,58 @@ socket.on('start-hand', function(_GameState) {
   renderPot();
   renderPlayersBar();
 
-  elements.stack.textContent = GameState.players[playerIndex].stack;
+  updateStack();
 
   if (GameState.actionIndex === playerIndex) {
-    renderRaiseForm();
+    const amountToCall = calculateAmountToCall();
+    renderRaiseForm(amountToCall);
   }
 });
 
-socket.on('raise', function(_GameState) {
+socket.on('raise', function(_playerIndex, _GameState) {
   GameState = _GameState;
 
   updatePot();
   updatePlayersBar();
-  elements.stack.textContent = GameState.players[playerIndex].stack;
+  updateStack();
+
+  const amountToCall = calculateAmountToCall();
 
   if (GameState.actionIndex === playerIndex) {
-    renderRaiseForm();
+    if (
+      amountToCall === GameState.players[playerIndex].stack
+      || GameState.players[_playerIndex].stack === 0 /* WARNING: Only works for heads-up. */
+    ) {
+      renderAllInToCallForm(amountToCall);
+    } else {
+      renderRaiseForm(amountToCall);
+    }
   }
 });
 
-socket.on('call', function(_GameState, isAllin) {
+socket.on('call', function(_GameState) {
   GameState = _GameState;
 
   updatePot();
   updatePlayersBar();
-  elements.stack.textContent = GameState.players[playerIndex].stack;
+  updateStack();
 
-  if (isAllin) {
-    // Do nothing.
-  } else if (GameState.actionIndex === playerIndex) {
-    if (isBigBlindOption()) renderBetForm();
-    else renderRaiseForm();
+  if (GameState.actionIndex === playerIndex) {
+    if (isBigBlindOption()) {
+      renderBetForm();
+    } else {
+      const amountToCall = calculateAmountToCall();
+      renderRaiseForm(amountToCall);
+    }
   }
+});
+
+socket.on('all-in-runout', function(_GameState) {
+  GameState = _GameState;
+
+  updatePot();
+  updatePlayersBar();
+  updateStack();
 });
 
 socket.on('check', function(_GameState) {
@@ -147,16 +176,21 @@ socket.on('check', function(_GameState) {
   }
 });
 
-// TODO: Add handling for 'isAllin'
 socket.on('bet', function(_GameState) {
   GameState = _GameState;
 
   updatePot();
   updatePlayersBar();
-  elements.stack.textContent = GameState.players[playerIndex].stack;
+  updateStack();
 
   if (GameState.actionIndex === playerIndex) {
-    renderRaiseForm();
+    const amountToCall = calculateAmountToCall();
+
+    if (amountToCall >= GameState.players[playerIndex].stack) {
+      renderAllInToCallForm();
+    } else {
+      renderRaiseForm(amountToCall);
+    }
   }
 });
 
@@ -164,8 +198,10 @@ socket.on('fold', function(_GameState) {
   GameState = _GameState;
 
   updatePlayersBar();
+
   if (playerIndex === GameState.actionIndex) {
-    renderRaiseForm();
+    const amountToCall = calculateAmountToCall();
+    renderRaiseForm(amountToCall);
   }
 });
 
@@ -174,24 +210,24 @@ socket.on('big-blind-option', function(_GameState) {
 
   updatePot();
   updatePlayersBar();
-  elements.stack.textContent = GameState.players[playerIndex].stack;
+  updateStack();
 
   if (playerIndex === GameState.bigBlindIndex) {
     renderBetForm();
   }
 });
 
-socket.on('next-street', function(_GameState, isAllin) {
+socket.on('next-street', function(_GameState, isAllIn) {
   GameState = _GameState;
 
   if (GameState.street === Street.FLOP) renderBoard();
   else appendCardToBoard();
 
-  if (isAllin) return;
+  if (isAllIn) return;
 
   updatePot();
   updatePlayersBar();
-  elements.stack.textContent = GameState.players[playerIndex].stack;
+  updateStack();
 
   if (GameState.actionIndex === playerIndex) {
     renderBetForm();
@@ -203,7 +239,7 @@ socket.on('resolve-effective-stacks', function(_GameState) {
 
   updatePot();
   updatePlayersBar();
-  elements.stack.textContent = GameState.players[playerIndex].stack;
+  updateStack();
 });
 
 socket.on('hand-finished', function(_GameState) {
@@ -211,7 +247,7 @@ socket.on('hand-finished', function(_GameState) {
 
   updatePot();
   updatePlayersBar();
-  elements.stack.textContent = GameState.players[playerIndex].stack;
+  updateStack();
 
   if (!elements.hasOwnProperty('handOver')) {
     elements.handOver = makeElement('p');
@@ -256,49 +292,43 @@ function renderGame() {
 
   appendChildren(elements.game, [elements.player, elements.stack]);
 
+  // TODO: Clean this up
   if (GameState.status === Status.LOBBY) {
     if (GameState.players.length >= 2) {
-      if (GameState.players[playerIndex].stack > 0) {
+      // Only allowing play if stack is at least the big-blind (will fix this later)
+      if (GameState.players[playerIndex].stack >= 100) {
         // Another if statement here so that ready waiting text
         // shows if player has already signified readiness.
         if (GameState.players[playerIndex].ready) {
-          if (!elements.hasOwnProperty('readyWaiting')) {
-            elements.readyWaiting = makeElement('p', {
-              textContent: 'Waiting for others to signify readiness...'
-            });
-          }
+          createElementIfNotExist('readyWaiting', 'p', {
+            textContent: 'Waiting for others to signify readiness...'
+          });
 
           elements.game.appendChild(elements.readyWaiting);
         } else {
-          if (!elements.hasOwnProperty('readyButton')) {
-            elements.readyButton = makeElement('button', {
-              type: 'button',
-              textContent: 'Ready',
-              onclick: signifyReadiness
-            });
-          }
+          createElementIfNotExist('readyButton', 'button', {
+            type: 'button',
+            textContent: 'Ready',
+            onclick: signifyReadiness
+          });
 
           elements.game.appendChild(elements.readyButton);
         }
       }
     } else {
-      if (!elements.hasOwnProperty('waiting')) {
-        elements.waiting = makeElement('p', {
-          textContent: 'Waiting for others to join...'
-        });
-      }
+      createElementIfNotExist('waiting', 'p', {
+        textContent: 'Waiting for others to join...'
+      });
 
       elements.game.appendChild(elements.waiting);
     }
 
     if (GameState.players[playerIndex].stack < 10000) {
-      if (!elements.hasOwnProperty('topOffButton')) {
-        elements.topOffButton = makeElement('button', {
-          type: 'button',
-          textContent: 'Top off',
-          onclick: onTopOffClick
-        });
-      }
+      createElementIfNotExist('topOffButton', 'button', {
+        type: 'button',
+        textContent: 'Top off',
+        onclick: onTopOffClick
+      });
 
       elements.game.appendChild(elements.topOffButton);
     }
@@ -312,22 +342,39 @@ function renderGame() {
 
       if (GameState.actionIndex === playerIndex) {
         // Check if 1 or fewer players are left without their chips all-in
-        var numPlayersNotAllin = 0;
+        var numPlayersNotAllIn = 0;
         for (var i = 0; i < GameState.players.length; i++) {
-          if (GameState.players[i].stack > 0) numPlayersNotAllin++;
+          if (GameState.players[i].stack > 0) numPlayersNotAllIn++;
         }
 
         // HACK: This condition will only work if playing heads-up.
         // Temporary hack until side-pots are implemented.
         var actions = GameState.actions[GameState.street];
         var len = actions.length;
-        if (numPlayersNotAllin <= 1 && len && actions[len - 1].type === 'call') {
-          // Do nothing.
+
+        if (numPlayersNotAllIn <= 1) {
+          if (len && actions[len - 1].type !== ActionType.CALL) {
+            const amountToCall = calculateAmountToCall();
+
+            renderAllInToCallForm(amountToCall);
+          }
         } else {
-          if (!actions.length || actions.every(a => a.type === 'check') || isBigBlindOption()) {
+          if (!len || actions.every(a => a.type === ActionType.CHECK) || isBigBlindOption()) {
             renderBetForm();
           } else {
-            renderRaiseForm();
+            const amountToCall = calculateAmountToCall();
+
+            if (amountToCall === GameState.players[playerIndex].stack) {
+              renderAllInToCallForm();
+            } else if (amountToCall > GameState.players[playerIndex].stack) {
+              // DEBUG:
+              throw new Error(
+                'Unexpected amount to call: ' + amountToCall + '.'
+                + ' Greater than current player\'s stack: ' + GameState.players[playerIndex].stack
+              );
+            } else {
+              renderRaiseForm(amountToCall);
+            }
           }
         }
       }
@@ -419,41 +466,47 @@ function updatePot() {
   elements.pot.children[0].textContent = 'Pot: ' + GameState.pot;
 }
 
-function renderRaiseForm() {
-  if (!elements.hasOwnProperty('raiseForm')) {
-    elements.raiseForm = makeElement('form', { onsubmit: onRaiseSubmit });
+function updateStack() {
+  elements.stack.textContent = GameState.players[playerIndex].stack;
+}
 
-    elements.raiseInputField = makeElement('input', {
-      type: 'text',
-      name: 'raise'
-    });
+function renderRaiseForm(amountToCall) {
+  createElementIfNotExist('raiseForm', 'form', { onsubmit: onRaiseSubmit });
+  createElementIfNotExist('raiseInputField', 'input', {
+    type: 'text',
+    name: 'raise'
+  });
 
-    appendChildren(elements.raiseForm, [
-      makeElement('label', { htmlFor: 'raise', textContent: 'Raise:' }),
-      elements.raiseInputField,
-      makeElement('button', { type: 'submit', textContent: 'Raise' }),
-      makeElement('button', { type: 'button', onclick: onCallClick, textContent: 'Call' }),
-      makeElement('button', { type: 'button', onclick: onFoldClick, textContent: 'Fold' })
-    ]);
-  }
+  // OPTIMIZE: Probably shouldn't have to clear this here, figure out how to update it piecemeal.
+  clearElement(elements.raiseForm);
+  appendChildren(elements.raiseForm, [
+    elements.raiseInputField,
+    makeElement('button', { type: 'submit', textContent: 'Raise' }),
+    makeElement('button', {
+      type: 'button',
+      onclick: onCallClick.bind(null, amountToCall),
+      textContent: 'Call'
+    }),
+    makeElement('button', { type: 'button', onclick: onFoldClick, textContent: 'Fold' })
+  ]);
 
-  if (!elements.hasOwnProperty('betText')) {
-    elements.betText = makeElement('p');
-  }
+  createElementIfNotExist('betText', 'p', {});
 
   var betTotal = GameState.currentBetTotal;
-  var amountToCall = calculateAmountToCall();
-
   elements.betText.textContent = 'Bet is ' + betTotal + ', ' + amountToCall + ' to call.';
 
-  elements.game.insertBefore(elements.raiseForm, elements.player);
-  elements.game.insertBefore(elements.betText, elements.raiseForm);
+  clearElement(elements.actionsContainer);
+  appendChildren(elements.actionsContainer, [elements.betText, elements.raiseForm]);
+
+  elements.game.insertBefore(elements.actionsContainer, elements.player);
 }
 
 function renderBetForm() {
+  // Not using createElementIfNotExist here because want to do certain other things
+  // if the element does not exist yet.
   if (!elements.hasOwnProperty('betForm')) {
     elements.betForm = makeElement('form', { onsubmit: onBetSubmit });
-    elements.betInputField = makeElement('input', { type: 'text', name: 'bet' });
+    createElementIfNotExist('betInputField', 'input', { type: 'text', name: 'bet' });
 
     appendChildren(elements.betForm, [
       makeElement('label', { htmlFor: 'bet', textContent: 'Bet amount:' }),
@@ -463,7 +516,42 @@ function renderBetForm() {
     ]);
   }
 
-  elements.game.insertBefore(elements.betForm, elements.player);
+  clearElement(elements.actionsContainer);
+  elements.actionsContainer.appendChild(elements.betForm);
+
+  elements.game.insertBefore(elements.actionsContainer, elements.player);
+}
+
+function renderAllInToCallForm(amountToCall) {
+  if (!amountToCall) {
+    amountToCall = calculateAmountToCall();
+  }
+
+  createElementIfNotExist('allInText', 'p', {});
+  elements.allInText.textContent = 'Call all in for ' + amountToCall + '?';
+
+  createElementIfNotExist('callButton', 'button', {
+    type: 'button',
+    textContent: 'Call'
+  });
+
+  elements.callButton.onclick = onCallClick.bind(null, amountToCall),
+
+  createElementIfNotExist('foldButton', 'button', {
+    type: 'button',
+    onclick: onFoldClick,
+    textContent: 'Fold'
+  });
+
+  var fragment = document.createDocumentFragment();
+
+  fragment.appendChild(elements.allInText);
+  fragment.appendChild(elements.callButton);
+  fragment.appendChild(elements.foldButton);
+
+  clearElement(elements.actionsContainer);
+  elements.actionsContainer.appendChild(fragment);
+  elements.game.insertBefore(elements.actionsContainer, elements.player);
 }
 
 function renderHand() {
@@ -500,6 +588,12 @@ function renderBoard() {
   ));
 
   elements.game.insertBefore(elements.board, elements.hand);
+}
+
+function createElementIfNotExist(elementName, tagName, props) {
+  if (!elements.hasOwnProperty(elementName)) {
+    elements[elementName] = makeElement(tagName, props);
+  }
 }
 
 function appendCardToBoard() {
@@ -549,9 +643,10 @@ function onJoinSubmit() {
     return;
   }
 
-  elements.root.removeChild(elements.joinForm);
-
   socket.emit('join', username);
+
+  elements.usernameInputField.value = '';
+  elements.root.removeChild(elements.joinForm);
 }
 
 function signifyReadiness() {
@@ -606,14 +701,14 @@ function onBetSubmit(event) {
   }
 
   elements.betInputField.value = '';
-  elements.game.removeChild(elements.betForm);
+  elements.game.removeChild(elements.actionsContainer);
 
   socket.emit('bet', { playerIndex: playerIndex, amount: amount });
 }
 
 function onCheckClick() {
   elements.betInputField.value = '';
-  elements.game.removeChild(elements.betForm);
+  elements.game.removeChild(elements.actionsContainer);
 
   socket.emit('check', { playerIndex: playerIndex });
 }
@@ -630,9 +725,25 @@ function onRaiseSubmit(event) {
     return;
   }
 
+  // OPTIMIZE: Shouldn't need to calculate this again.
+  var amountToCall = calculateAmountToCall();
+
   amount = parseInt(amount, 10);
   // This will not catch a particular illegal small blind vs big blind raise yet.
-  if (typeof amount !== 'number' || amount < 100 || amount < calculateAmountToCall() * 2) {
+  if (typeof amount !== 'number' || amount < 100) {
+    return;
+  }
+
+  // DEBUG:
+  console.log('Current bet total is: ', GameState.currentBetTotal);
+
+  // WARNING: This will only work heads-up.
+  var minimumRaise = amountToCall * 2;
+  if (
+    amount < minimumRaise
+    && GameState.players[playerIndex].stack >= minimumRaise
+    && amount !== GameState.players[playerIndex].stack
+  ) {
     return;
   }
 
@@ -641,23 +752,23 @@ function onRaiseSubmit(event) {
   }
 
   elements.raiseInputField.value = '';
-  elements.game.removeChild(elements.raiseForm);
-  elements.game.removeChild(elements.betText);
+  elements.game.removeChild(elements.actionsContainer);
 
   socket.emit('raise', { amount: amount, playerIndex: playerIndex });
 }
 
-function onCallClick() {
-  var amountToCall = calculateAmountToCall();
+function onCallClick(amountToCall) {
+  if (!amountToCall) {
+    amountToCall = calculateAmountToCall();
+  }
+
   socket.emit('call', { playerIndex: playerIndex, amountToCall: amountToCall });
 
-  elements.game.removeChild(elements.raiseForm);
-  elements.game.removeChild(elements.betText);
+  elements.game.removeChild(elements.actionsContainer);
 }
 
 function onFoldClick() {
-  elements.game.removeChild(elements.raiseForm);
-  elements.game.removeChild(elements.betText);
+  elements.game.removeChild(elements.actionsContainer);
   elements.game.removeChild(elements.hand);
 
   socket.emit('fold', { playerIndex: playerIndex });

@@ -2,16 +2,21 @@ const express = require('express');
 const http = require('http');
 const socketio = require('socket.io');
 
-const { generateDeck, extractRandomCard, getHandRank, resolveTie } = require('./poker');
-const { Status, Street } = require('./public/enums');
+const {
+  generateDeck,
+  extractRandomCard,
+  getHandRank,
+  resolveTie,
+  calculateWinnerIndexesAtShowdown,
+  kSubsets
+} = require('./poker');
+const { Status, Street, ActionType } = require('./public/enums');
 
 const app = express();
 const server = http.createServer(app);
 const io = socketio(server);
 
 // Only one table for now with a 10,000 buyin.
-// Will probably use a message queue for this eventually
-// rather than having the server be stateful.
 
 const BUY_IN = 10000;
 const SMALL_BLIND = 50;
@@ -20,9 +25,7 @@ const BIG_BLIND = 100;
 const WAIT_TO_RESET_MS = 4000;
 const ALLIN_BETWEEN_STREETS_MS = 2500;
 
-// Do we need this? Might be able to just set the desired
-// initial state to GameState directly.
-const InitialState = {
+let GameState = {
   players: [],
   hands: [],
   deck: generateDeck(),
@@ -43,8 +46,6 @@ const InitialState = {
   street: Street.PRE_FLOP,
   winnerIndexes: []
 };
-
-let GameState = { ...InitialState };
 
 app.use((req, res, next) => {
   res.header('Access-Control-Allow-Origin', '*');
@@ -122,14 +123,14 @@ io.on('connection', function(client) {
       GameState.actions[Street.PRE_FLOP].push({
         amount: SMALL_BLIND,
         playerIndex: GameState.smallBlindIndex,
-        type: 'small-blind'
+        type: ActionType.SMALL_BLIND
       });
 
       GameState.players[GameState.bigBlindIndex].stack -= BIG_BLIND;
       GameState.actions[Street.PRE_FLOP].push({
         amount: BIG_BLIND,
         playerIndex: GameState.bigBlindIndex,
-        type: 'big-blind'
+        type: ActionType.BIG_BLIND
       });
 
       GameState.pot = SMALL_BLIND + BIG_BLIND;
@@ -157,47 +158,54 @@ io.on('connection', function(client) {
   client.on('raise', function({ amount, playerIndex }) {
     GameState.players[playerIndex].stack -= amount;
     GameState.pot += amount
+
     GameState.actions[GameState.street].push({
       amount,
       playerIndex,
-      type: 'raise'
+      type: ActionType.RAISE
     });
 
     incrementActionIndex();
     GameState.currentBetTotal = getCurrentBetTotal();
 
-    io.emit('raise', GameState);
+    io.emit('raise', playerIndex, GameState);
   });
 
   client.on('call', function({ playerIndex, amountToCall }) {
+    const action = { playerIndex, type: ActionType.CALL };
+
     if (amountToCall >= GameState.players[playerIndex].stack) {
-      // Calling all in.
-      amountToCall = GameState.players[playerIndex].stack;
+      action.amount = GameState.players[playerIndex].stack;
+      action.allIn = true;
+
+      GameState.pot += GameState.players[playerIndex].stack;
+      GameState.players[playerIndex].stack = 0;
+      // TODO: If necessary, create side pot.
+    } else {
+      action.amount = amountToCall;
+
+      GameState.pot += amountToCall;
+      GameState.players[playerIndex].stack -= amountToCall;
     }
 
-    GameState.players[playerIndex].stack -= amountToCall;
-    GameState.pot += amountToCall;
-    GameState.actions[GameState.street].push({
-      playerIndex,
-      amount: amountToCall,
-      type: 'call'
-    });
+    GameState.actions[GameState.street].push(action);
 
-    let numPlayersNotAllin = 0;
+    // TODO: Factor this into a "shouldDoAllInRunout" function.
+    let numPlayersNotAllIn = 0;
     for (const player of GameState.players) {
-      if (player.stack > 0) numPlayersNotAllin++;
+      if (player.stack > 0) numPlayersNotAllIn++;
     }
 
-    if (numPlayersNotAllin <= 1) {
-      // Calling all-in for the effective stack.
-      io.emit('call', GameState, true);
-      return allinRunoutProc();
+    if (numPlayersNotAllIn <= 1) {
+      // Calling all in for the effective stack.
+      io.emit('all-in-runout', GameState);
+      return allInRunoutProc();
     }
 
     incrementActionIndex();
     const laa = getLatestAggressiveAction();
 
-    if (laa.type === 'big-blind') {
+    if (laa.type === ActionType.BIG_BLIND) {
       io.emit('big-blind-option', GameState);
     } else if (shouldMoveToNextStreet('call', { laa })) {
       if (GameState.street === Street.RIVER) {
@@ -207,7 +215,7 @@ io.on('connection', function(client) {
         io.emit('next-street', GameState);
       }
     } else {
-      io.emit('call', GameState, false);
+      io.emit('call', GameState);
     }
   });
 
@@ -220,7 +228,7 @@ io.on('connection', function(client) {
     if (GameState.street === Street.PRE_FLOP
       && playerIndex === GameState.bigBlindIndex
       && laa.playerIndex === playerIndex
-      && laa.type === 'big-blind'
+      && laa.type === ActionType.BIG_BLIND
     ) {
       GameState.currentBetTotal = amount + BIG_BLIND;
     } else {
@@ -230,7 +238,7 @@ io.on('connection', function(client) {
     GameState.actions[GameState.street].push({
       playerIndex,
       amount,
-      type: 'bet'
+      type: ActionType.BET
     });
     incrementActionIndex();
 
@@ -240,7 +248,7 @@ io.on('connection', function(client) {
   client.on('check', function({ playerIndex }) {
     GameState.actions[GameState.street].push({
       playerIndex,
-      type: 'check'
+      type: ActionType.CHECK
     });
 
     if (shouldMoveToNextStreet('check')) {
@@ -285,7 +293,7 @@ io.on('connection', function(client) {
       incrementActionIndex();
 
       const laa = getLatestAggressiveAction();
-      if (GameState.actionIndex === GameState.bigBlindIndex && laa.type === 'big-blind') {
+      if (GameState.actionIndex === GameState.bigBlindIndex && laa.type === ActionType.BIG_BLIND) {
         io.emit('big-blind-option', GameState);
       } else if (shouldMoveToNextStreet('fold', { laa })) {
         if (GameState.street === Street.RIVER) {
@@ -374,7 +382,7 @@ function moveToNextStreet() {
 function getLatestAggressiveAction() {
   let action;
   for (const a of GameState.actions[GameState.street]) {
-    if (a.amount && a.type !== 'call') {
+    if (a.amount && a.type !== ActionType.CALL) {
       action = a;
     }
   }
@@ -414,7 +422,7 @@ function getCurrentBetTotal() {
   // Sum up all bets from the latest bettor to get the current bet
   let latestAggressorIndex;
   for (const a of GameState.actions[GameState.street]) {
-    if (a.type === 'bet' || a.type === 'raise') {
+    if (a.type === ActionType.BET || a.type === ActionType.RAISE) {
       latestAggressorIndex = a.playerIndex
     }
   }
@@ -429,157 +437,7 @@ function getCurrentBetTotal() {
   return currentBetTotal;
 }
 
-function calculateWinnerIndexesAtShowdown() {
-  // Difference between GameState.hands and showdownHands is GameState.hands
-  // is just 2 cards, showdownHands will be the best 5 cards of those 2 combined w/ board.
-  const showdownHands = [];
-  const handRanks = [];
-  let combinedHand, possibleHands, tmp, currBestHandIndexes, currBestHandRank;
-  console.log('Board:', GameState.board);
-  for (let i = 0; i < GameState.hands.length; i++) {
-    combinedHand = GameState.hands[i].concat(GameState.board);
-    combinedHand.sort((a, b) => a.value - b.value);
-
-    possibleHands = [];
-    tmp = Array(5).fill(null);
-
-    kSubsets(combinedHand, tmp, possibleHands, 0, 0);
-
-    // DEBUG:
-    console.log('Username:', GameState.players[i].username);
-    console.log('Pocket cards:', GameState.hands[i]);
-
-    // All indexes of hands w/ same (winning) rank get put in currBestHandIndexes
-    currBestHandIndexes = [0];
-    currBestHandRank = getHandRank(possibleHands[0]);
-    let currHandRank;
-    for (let i = 1; i < possibleHands.length/* 21? */; i++) {
-      currHandRank = getHandRank(possibleHands[i]);
-
-      if (currHandRank < currBestHandRank) {
-        currBestHandIndexes = [i];
-        currBestHandRank = currHandRank;
-      } else if (currHandRank > currBestHandRank) {
-        // Do nothing?
-      } else if (currHandRank === currBestHandRank) {
-        currBestHandIndexes.push(i);
-      } else {
-        console.error(
-          'Somethings gone wrong. currHandRank and currBestHandRank ' +
-          'are probably not comparable as numbers.'
-        );
-      }
-    }
-
-    // DEBUG:
-    console.log('Hand rank:', currBestHandRank);
-
-    let resolvedTiesBestHandIndex = currBestHandIndexes[0];
-    let cmpResult;
-    for (const index of currBestHandIndexes) {
-      cmpResult = resolveTie(
-        currBestHandRank,
-        possibleHands[resolvedTiesBestHandIndex],
-        possibleHands[index]
-      );
-
-      if (cmpResult === 2) resolvedTiesBestHandIndex = index;
-    }
-
-    // DEBUG:
-    console.log('Hand:', possibleHands[resolvedTiesBestHandIndex]);
-
-    showdownHands.push(possibleHands[resolvedTiesBestHandIndex]);
-    handRanks.push(currBestHandRank);
-  }
-
-  // DEBUG:
-  console.log('Showdown hands:', showdownHands);
-
-  let currWinningHandIndexes = [0];
-  let currWinningHandRank = handRanks[0];
-  let cmpResult;
-  for (let i = 1; i < showdownHands.length; i++) {
-    if (handRanks[i] < currWinningHandRank) {
-      currWinningHandIndexes = [i];
-      currWinningHandRank = handRanks[i];
-    } else if (handRanks[i] > currWinningHandRank) {
-      // Do nothing?
-    } else if (handRanks[i] === currWinningHandRank) {
-      cmpResult = resolveTie(
-        handRanks[i],
-        showdownHands[i],
-        showdownHands[currWinningHandIndexes[0]]
-      );
-
-      if (cmpResult === 1) {
-        currWinningHandIndexes = [i];
-      } else if (cmpResult === 2) {
-        // Do nothing.
-      } else if (cmpResult === 0) {
-        currWinningHandIndexes.push(i);
-      } else {
-        console.error(
-          'Unexpected value of cmpResult. Expected 0, 1, or 2; got ' + cmpResult + '.'
-        );
-      }
-    }
-  }
-
-  // DEBUG:
-  console.log('Winning hand rank:', currWinningHandRank);
-  console.log('Winning hand(s):', currWinningHandIndexes.map(index => showdownHands[index]));
-
-  let winners = GameState.players[currWinningHandIndexes[0]].username;
-  for (let i = 1; i < currWinningHandIndexes.length; i++) {
-    winners += ',' + GameState.players[currWinningHandIndexes[i]].username;
-  }
-  console.log('Winner(s):', winners);
-
-  return currWinningHandIndexes;
-}
-
-function allinRunoutProc() {
-
-  // Resolving effective stack sizes here.
-  // WARNING: This will only work for heads-up. In order to work for
-  // 3+ handed I will need to implement side pots.
-
-  // For now I'm just finding the bigger stack and adding the difference
-  // back into it.
-  const actions = GameState.actions[GameState.street];
-  const shove = actions[actions.length - 2];
-  const call = actions[actions.length - 1];
-
-  // Again, this will only work for heads-up (2-player).
-  let sumContributionsOfShover = 0;
-  let sumContributionsOfCaller = 0;
-  for (const action of actions) {
-    if (action.amount) {
-      if (action.playerIndex === shove.playerIndex) {
-        sumContributionsOfShover += action.amount;
-      } else if (action.playerIndex === call.playerIndex) {
-        sumContributionsOfCaller += action.amount;
-      } else {
-        // DEBUG:
-        throw new Error(
-          `Player index ${action.playerIndex} of action does not match ` +
-          `index of shover ${shove.playerIndex} or index of caller ${call.playerIndex}`
-        );
-      }
-    }
-  }
-
-  if (sumContributionsOfShover > sumContributionsOfCaller) {
-    // Here is where the reconciliation actually happens if it needs to.
-    const balanceDueToShover = sumContributionsOfShover - sumContributionsOfCaller;
-
-    GameState.pot -= balanceDueToShover;
-    GameState.players[shove.playerIndex].stack += balanceDueToShover;
-
-    io.emit('resolve-effective-stacks', GameState);
-  }
-
+function allInRunoutProc() {
   // Fire next-street events every 2.5 seconds until streetIndex is 3 (river)
   const runoutInterval = setInterval(function() {
     if (GameState.street >= Street.RIVER) {
@@ -594,7 +452,8 @@ function allinRunoutProc() {
 
 function showdownProc() {
   GameState.status = Status.FINISHED;
-  GameState.winnerIndexes = calculateWinnerIndexesAtShowdown();
+  GameState.winnerIndexes =
+    calculateWinnerIndexesAtShowdown(GameState.board, GameState.hands, GameState.players);
 
   for (const index of GameState.winnerIndexes) {
     GameState.players[index].stack += GameState.pot / GameState.winnerIndexes.length;
@@ -608,18 +467,4 @@ function showdownProc() {
     resetHandState();
     io.emit('reset', GameState);
   }, WAIT_TO_RESET_MS);
-}
-
-function kSubsets(combinedHand, tmp, possibleHands, i, j) {
-  if (j === 5) {
-    possibleHands.push(tmp.slice());
-    return;
-  }
-
-  if (i >= combinedHand.length) return;
-
-  tmp[j] = combinedHand[i];
-  kSubsets(combinedHand, tmp, possibleHands, i + 1, j + 1);
-
-  kSubsets(combinedHand, tmp, possibleHands, i + 1, j);
 }

@@ -16,8 +16,9 @@ function makeEnum() {
 
 var Status = makeEnum('LOBBY', 'HAND', 'FINISHED');
 var Street = makeEnum('PRE_FLOP', 'FLOP', 'TURN', 'RIVER');
+var ActionType = makeEnum('SMALL_BLIND', 'BIG_BLIND', 'CHECK', 'BET', 'CALL', 'FOLD', 'RAISE')
 
 // If we are in a Node.js environment, export the module
 if (typeof window === 'undefined') {
-  module.exports = { makeEnum, Status, Street };
+  module.exports = { makeEnum, Status, Street, ActionType };
 }
