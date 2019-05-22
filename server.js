@@ -1,6 +1,7 @@
 const express = require('express');
 const http = require('http');
 const socketio = require('socket.io');
+const assert = require('assert');
 
 const {
   generateDeck,
@@ -207,7 +208,7 @@ io.on('connection', function(client) {
 
     if (laa.type === ActionType.BIG_BLIND) {
       io.emit('big-blind-option', GameState);
-    } else if (shouldMoveToNextStreet('call', { laa })) {
+    } else if (shouldMoveToNextStreet(ActionType.CALL, laa.playerIndex)) {
       if (GameState.street === Street.RIVER) {
         showdownProc();
       } else {
@@ -251,7 +252,7 @@ io.on('connection', function(client) {
       type: ActionType.CHECK
     });
 
-    if (shouldMoveToNextStreet('check')) {
+    if (shouldMoveToNextStreet(ActionType.CHECK)) {
       if (GameState.street === Street.RIVER) {
         showdownProc();
       } else {
@@ -295,7 +296,7 @@ io.on('connection', function(client) {
       const laa = getLatestAggressiveAction();
       if (GameState.actionIndex === GameState.bigBlindIndex && laa.type === ActionType.BIG_BLIND) {
         io.emit('big-blind-option', GameState);
-      } else if (shouldMoveToNextStreet('fold', { laa })) {
+      } else if (shouldMoveToNextStreet(ActionType.FOLD, laa.playerIndex)) {
         if (GameState.street === Street.RIVER) {
           showdownProc();
         } else {
@@ -338,8 +339,8 @@ function incrementActionIndex() {
   }
 }
 
-function shouldMoveToNextStreet(eventType, infoObj) {
-  if (eventType === 'check') {
+function shouldMoveToNextStreet(actionType, latestAggressorIndex) {
+  if (actionType === ActionType.CHECK) {
     if (GameState.street === Street.PRE_FLOP) {
       if (GameState.actionIndex === GameState.bigBlindIndex) return true;
       else return false;
@@ -348,7 +349,10 @@ function shouldMoveToNextStreet(eventType, infoObj) {
       else return false;
     }
   } else {
-    if (infoObj.laa.playerIndex === GameState.actionIndex) return true;
+    assert(actionType === ActionType.CALL || actionType === ActionType.FOLD);
+    assert(!isNaN(latestAggressorIndex));
+    
+    if (latestAggressorIndex === GameState.actionIndex) return true;
     else return false;
   }
 }

@@ -326,7 +326,7 @@ function calculateWinnerIndexesAtShowdown(board, hands, players) {
     possibleHands = [];
     tmp = Array(5).fill(null);
 
-    kSubsets(combinedHand, tmp, possibleHands, 0, 0);
+    kSubsets(combinedHand, tmp, possibleHands);
 
     // DEBUG:
     console.log('Username:', players[i].username);
@@ -422,21 +422,7 @@ function calculateWinnerIndexesAtShowdown(board, hands, players) {
   return currWinningHandIndexes;
 }
 
-function kSubsets(combinedHand, tmp, possibleHands, i, j) {
-  if (j === 5) {
-    possibleHands.push(tmp.slice());
-    return;
-  }
-
-  if (i >= combinedHand.length) return;
-
-  tmp[j] = combinedHand[i];
-  kSubsets(combinedHand, tmp, possibleHands, i + 1, j + 1);
-
-  kSubsets(combinedHand, tmp, possibleHands, i + 1, j);
-}
-
-function kSubsets(combinedHand, tmp, possibleHands, i, j) {
+function kSubsets(combinedHand, tmp, possibleHands, i = 0, j = 0) {
   if (j === 5) {
     possibleHands.push(tmp.slice());
     return;

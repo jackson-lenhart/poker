@@ -443,6 +443,11 @@ function updatePlayersBar() {
     } else {
       elements.playersBar.children[i].className = 'player-item';
     }
+
+    if (i !== playerIndex) {
+      elements.playersBar.children[i].textContent =
+        GameState.players[i].username + ': ' + GameState.players[i].stack;
+    }
   }
 }
 
