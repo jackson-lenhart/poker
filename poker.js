@@ -1,4 +1,8 @@
+'use strict';
+
 const assert = require('assert');
+
+const suits = ['c', 's', 'h', 'd'];
 
 function generateDeck() {
   const deck = [];
@@ -6,7 +10,7 @@ function generateDeck() {
   // Outer loop is suits, inner loop is card value
   for (let i = 0; i < 4; i++) {
     for (let j = 2; j < 15; j++) {
-      deck.push({ suit: i, value: j });
+      deck.push({ suit: suits[i], value: j });
     }
   }
 
@@ -309,6 +313,14 @@ function resolveTie(handRank, hand1, hand2) {
       );
     }
   }
+}
+
+function calculateWinnerIndexes(board, hands, players, logStr) {
+  const showdownHands = [];
+  const handRanks = [];
+
+  let combinedHand, possibleHands, tmp, currBestHandIndexes, currBestHandRank;
+
 }
 
 // NOTE: The 'players' parameter may only be needed for debug logging.

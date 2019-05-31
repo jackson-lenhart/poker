@@ -1,7 +1,7 @@
 const assert = require('assert');
 const { expect } = require('chai');
 
-const { generateDeck, extractRandomCard, getHandRank, resolveTie } = require('../poker');
+const { generateDeck, extractRandomCard, getHandRank, resolveTie } = require('./poker');
 
 const deck = generateDeck();
 

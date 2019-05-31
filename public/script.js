@@ -121,7 +121,7 @@ socket.on('start-hand', function(_GameState) {
   }
 });
 
-socket.on('raise', function(_playerIndex, _GameState) {
+socket.on('raise', function(_GameState) {
   GameState = _GameState;
 
   updatePot();
@@ -131,10 +131,7 @@ socket.on('raise', function(_playerIndex, _GameState) {
   const amountToCall = calculateAmountToCall();
 
   if (GameState.actionIndex === playerIndex) {
-    if (
-      amountToCall === GameState.players[playerIndex].stack
-      || GameState.players[_playerIndex].stack === 0 /* WARNING: Only works for heads-up. */
-    ) {
+    if (amountToCall >= GameState.players[playerIndex].stack) {
       renderAllInToCallForm(amountToCall);
     } else {
       renderRaiseForm(amountToCall);
@@ -187,7 +184,7 @@ socket.on('bet', function(_GameState) {
     const amountToCall = calculateAmountToCall();
 
     if (amountToCall >= GameState.players[playerIndex].stack) {
-      renderAllInToCallForm();
+      renderAllInToCallForm(amountToCall);
     } else {
       renderRaiseForm(amountToCall);
     }
@@ -234,6 +231,10 @@ socket.on('next-street', function(_GameState, isAllIn) {
   }
 });
 
+socket.on('side-pot', function(_GameState) {
+  console.log('Does this get emitted?');
+});
+
 socket.on('resolve-effective-stacks', function(_GameState) {
   GameState = _GameState;
 
@@ -253,10 +254,11 @@ socket.on('hand-finished', function(_GameState) {
     elements.handOver = makeElement('p');
   }
 
-  if (GameState.winnerIndexes.length === 1) {
+  // TODO: Make this support side pots.
+  if (GameState.winnerIndexesPerPot[0].length === 1) {
     elements.handOver.textContent = 'Hand finished. '
-      + GameState.players[GameState.winnerIndexes[0]].username
-      + ' wins ' + GameState.pot + '.';
+    + GameState.players[GameState.winnerIndexesPerPot[0][0]].username
+    + ' wins ' + GameState.pots[0].amount + '.';
   } else {
     // TODO: Make this actually into a formatted string/sentence with all
     // players' usernames who split the pot.
@@ -365,7 +367,7 @@ function renderGame() {
             const amountToCall = calculateAmountToCall();
 
             if (amountToCall === GameState.players[playerIndex].stack) {
-              renderAllInToCallForm();
+              renderAllInToCallForm(amountToCall);
             } else if (amountToCall > GameState.players[playerIndex].stack) {
               // DEBUG:
               throw new Error(
@@ -383,10 +385,11 @@ function renderGame() {
         elements.handOver = makeElement('p');
       }
 
-      if (GameState.winnerIndexes.length === 1) {
+      // TODO: Implement side pots here.
+      if (GameState.winnerIndexesPerPot[0].length === 1) {
         elements.handOver.textContent = 'Hand finished. '
-          + GameState.players[GameState.winnerIndexes[0]].username
-          + ' wins ' + GameState.pot + '.';
+          + GameState.players[GameState.winnerIndexesPerPot[0][0]].username
+          + ' wins ' + GameState.pots[0].amount + '.';
       } else {
         elements.handOver.textContent = 'Split pot.';
       }
@@ -459,16 +462,18 @@ function updateBetText() {
 }
 
 function renderPot() {
+  // TODO: Make this support side pots.
   elements.pot = makeElement('div', { className: 'pot' });
   elements.pot.appendChild(makeElement('h2', {
-    textContent: 'Pot: ' + GameState.pot
+    textContent: 'Pot: ' + GameState.pots[0].amount
   }));
 
   elements.game.prepend(elements.pot);
 }
 
 function updatePot() {
-  elements.pot.children[0].textContent = 'Pot: ' + GameState.pot;
+  // TODO: Make this support side pots.
+  elements.pot.children[0].textContent = 'Pot: ' + GameState.pots[0].amount;
 }
 
 function updateStack() {
@@ -481,6 +486,8 @@ function renderRaiseForm(amountToCall) {
     type: 'text',
     name: 'raise'
   });
+
+  elements.raiseInputField.autocomplete = 'new-password';
 
   // OPTIMIZE: Probably shouldn't have to clear this here, figure out how to update it piecemeal.
   clearElement(elements.raiseForm);
@@ -513,6 +520,9 @@ function renderBetForm() {
     elements.betForm = makeElement('form', { onsubmit: onBetSubmit });
     createElementIfNotExist('betInputField', 'input', { type: 'text', name: 'bet' });
 
+    // LOL
+    elements.betInputField.autocomplete = 'new-password';
+
     appendChildren(elements.betForm, [
       makeElement('label', { htmlFor: 'bet', textContent: 'Bet amount:' }),
       elements.betInputField,
@@ -533,7 +543,7 @@ function renderAllInToCallForm(amountToCall) {
   }
 
   createElementIfNotExist('allInText', 'p', {});
-  elements.allInText.textContent = 'Call all in for ' + amountToCall + '?';
+  elements.allInText.textContent = 'Call all in for ' + GameState.players[playerIndex].stack + '?';
 
   createElementIfNotExist('callButton', 'button', {
     type: 'button',
@@ -620,13 +630,7 @@ function calculateAmountToCall() {
     }
   }
 
-  const amountToCall = GameState.currentBetTotal - myBetTotal;
-  if (amountToCall > GameState.players[playerIndex].stack) {
-    // Special case for all-in to call.
-    return GameState.players[playerIndex].stack;
-  } else {
-    return amountToCall;
-  }
+  return GameState.currentBetTotal - myBetTotal;
 }
 
 function isBigBlindOption() {
@@ -739,10 +743,6 @@ function onRaiseSubmit(event) {
     return;
   }
 
-  // DEBUG:
-  console.log('Current bet total is: ', GameState.currentBetTotal);
-
-  // WARNING: This will only work heads-up.
   var minimumRaise = amountToCall * 2;
   if (
     amount < minimumRaise

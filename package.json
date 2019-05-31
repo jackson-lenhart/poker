@@ -6,13 +6,14 @@
   "scripts": {
     "start": "node server.js",
     "debug": "node inspect server.js",
-    "test": "mocha"
+    "test": "mocha test"
   },
   "author": "Jackson Lenhart",
   "license": "ISC",
   "dependencies": {
     "chai": "^4.2.0",
     "express": "^4.16.4",
-    "socket.io": "^2.2.0"
+    "socket.io": "^2.2.0",
+    "uniqid": "^5.0.3"
   }
 }

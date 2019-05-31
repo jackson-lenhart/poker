@@ -9,11 +9,5 @@ function mapCardDataToImgSrc(card) {
   else if (card.value === 13) src += 'K';
   else if (card.value === 14) src += 'A';
 
-  if (card.suit === 0) src += 'S';
-  else if (card.suit === 1) src += 'C';
-  else if (card.suit === 2) src += 'H';
-  else if (card.suit === 3) src += 'D';
-
-  src += '.png';
-  return src;
+return src + card.suit.toUpperCase() + '.png';
 }
