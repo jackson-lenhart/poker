@@ -1,7 +1,13 @@
 const assert = require('assert');
 const { expect } = require('chai');
 
-const { generateDeck, extractRandomCard, getHandRank, resolveTie } = require('./poker');
+const {
+  generateDeck,
+  extractRandomCard,
+  getHandRank,
+  resolveTie,
+  calculateWinnerIndexes
+} = require('./poker');
 
 const deck = generateDeck();
 
@@ -299,5 +305,26 @@ describe('resolveTie', function() {
     ];
 
     expect(resolveTie(9, mockHand1, mockHand2)).to.equal(2);
+  });
+});
+
+describe('calculateWinnerIndexes', function() {
+  it('Determines correct winner in specific case', function() {
+    const hands = [
+      [{ value: 4, suit: 'h' }, { value: 5, suit: 'c' }],
+      [{ value: 7, suit: 's' }, { value: 8, suit: 'h' }]
+    ];
+
+    const board = [
+      { value: 5, suit: 's' },
+      { value: 9, suit: 'h' },
+      { value: 13, suit: 'h' },
+      { value: 14, suit: 's' },
+      { value: 10, suit: 'd' }
+    ];
+
+    const playerIndexes = [0, 1];
+
+    expect(calculateWinnerIndexes(playerIndexes, hands, board)).to.deep.equal([0]);
   });
 });

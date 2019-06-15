@@ -315,24 +315,15 @@ function resolveTie(handRank, hand1, hand2) {
   }
 }
 
-function calculateWinnerIndexes(board, hands, players, logStr) {
-  const showdownHands = [];
-  const handRanks = [];
+function calculateWinnerIndexes(playerIndexes, hands, board) {
+  if (playerIndexes.length === 1) return [playerIndexes[0]];
 
-  let combinedHand, possibleHands, tmp, currBestHandIndexes, currBestHandRank;
-
-}
-
-// NOTE: The 'players' parameter may only be needed for debug logging.
-function calculateWinnerIndexesAtShowdown(board, hands, players) {
-  // Difference between GameState.hands and showdownHands is GameState.hands
-  // is just 2 cards, showdownHands will be the best 5 cards of those 2 combined w/ board.
   const showdownHands = [];
   const handRanks = [];
   let combinedHand, possibleHands, tmp, currBestHandIndexes, currBestHandRank;
-  console.log('Board:', board);
-  for (let i = 0; i < hands.length; i++) {
-    combinedHand = hands[i].concat(board);
+
+  for (const index of playerIndexes) {
+    combinedHand = hands[index].concat(board);
     combinedHand.sort((a, b) => a.value - b.value);
 
     possibleHands = [];
@@ -340,15 +331,13 @@ function calculateWinnerIndexesAtShowdown(board, hands, players) {
 
     kSubsets(combinedHand, tmp, possibleHands);
 
-    // DEBUG:
-    console.log('Username:', players[i].username);
-    console.log('Pocket cards:', hands[i]);
-
-    // All indexes of hands w/ same (winning) rank get put in currBestHandIndexes
     currBestHandIndexes = [0];
     currBestHandRank = getHandRank(possibleHands[0]);
     let currHandRank;
-    for (let i = 1; i < possibleHands.length/* 21? */; i++) {
+
+    assert(possibleHands.length === 21);
+
+    for (let i = 1; i < possibleHands.length; i++) {
       currHandRank = getHandRank(possibleHands[i]);
 
       if (currHandRank < currBestHandRank) {
@@ -359,15 +348,9 @@ function calculateWinnerIndexesAtShowdown(board, hands, players) {
       } else if (currHandRank === currBestHandRank) {
         currBestHandIndexes.push(i);
       } else {
-        console.error(
-          'Somethings gone wrong. currHandRank and currBestHandRank ' +
-          'are probably not comparable as numbers.'
-        );
+        assert(false);
       }
     }
-
-    // DEBUG:
-    console.log('Hand rank:', currBestHandRank);
 
     let resolvedTiesBestHandIndex = currBestHandIndexes[0];
     let cmpResult;
@@ -381,38 +364,30 @@ function calculateWinnerIndexesAtShowdown(board, hands, players) {
       if (cmpResult === 2) resolvedTiesBestHandIndex = index;
     }
 
-    // DEBUG:
-    console.log('Hand:', possibleHands[resolvedTiesBestHandIndex]);
-
     showdownHands.push(possibleHands[resolvedTiesBestHandIndex]);
     handRanks.push(currBestHandRank);
   }
 
-  // DEBUG:
-  console.log('Showdown hands:', showdownHands);
-
-  let currWinningHandIndexes = [0];
+  let currWinnerIndexes = [playerIndexes[0]];
   let currWinningHandRank = handRanks[0];
   let cmpResult;
-  for (let i = 1; i < showdownHands.length; i++) {
+  for (let i = 1; i < playerIndexes.length; i++) {
     if (handRanks[i] < currWinningHandRank) {
-      currWinningHandIndexes = [i];
+      currWinnerIndexes = [playerIndexes[i]];
       currWinningHandRank = handRanks[i];
     } else if (handRanks[i] > currWinningHandRank) {
-      // Do nothing?
+      // Do nothing.
     } else if (handRanks[i] === currWinningHandRank) {
       cmpResult = resolveTie(
         handRanks[i],
         showdownHands[i],
-        showdownHands[currWinningHandIndexes[0]]
+        showdownHands[currWinnerIndexes[0]]
       );
 
       if (cmpResult === 1) {
-        currWinningHandIndexes = [i];
+        currWinnerIndexes = [playerIndexes[i]];
       } else if (cmpResult === 2) {
         // Do nothing.
-      } else if (cmpResult === 0) {
-        currWinningHandIndexes.push(i);
       } else {
         console.error(
           'Unexpected value of cmpResult. Expected 0, 1, or 2; got ' + cmpResult + '.'
@@ -421,17 +396,7 @@ function calculateWinnerIndexesAtShowdown(board, hands, players) {
     }
   }
 
-  // DEBUG:
-  console.log('Winning hand rank:', currWinningHandRank);
-  console.log('Winning hand(s):', currWinningHandIndexes.map(index => showdownHands[index]));
-
-  let winnersString = players[currWinningHandIndexes[0]].username;
-  for (let i = 1; i < currWinningHandIndexes.length; i++) {
-    winnersString += ',' + players[currWinningHandIndexes[i]].username;
-  }
-  console.log('Winner(s):', winnersString);
-
-  return currWinningHandIndexes;
+  return currWinnerIndexes;
 }
 
 function kSubsets(combinedHand, tmp, possibleHands, i = 0, j = 0) {
@@ -453,6 +418,6 @@ module.exports = {
   extractRandomCard,
   getHandRank,
   resolveTie,
-  calculateWinnerIndexesAtShowdown,
+  calculateWinnerIndexes,
   kSubsets
 };

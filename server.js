@@ -11,6 +11,7 @@ const {
   extractRandomCard,
   getHandRank,
   resolveTie,
+  calculateWinnerIndexes,
   kSubsets
 } = require('./poker');
 const { Status, Street, ActionType } = require('./public/enums');
@@ -86,10 +87,6 @@ io.on('connection', function(client) {
       client.emit('join-success', GameState, GameState.players.length - 1)
       client.broadcast.emit('join', GameState);
     }
-  });
-
-  client.on('disconnect', function(reason) {
-    // TODO
   });
 
   client.on('gateway', function(username) {
@@ -187,6 +184,7 @@ io.on('connection', function(client) {
 
     let sumContributions = sumContributionsOfPlayerThisStreet(playerIndex);
     const laa = getLatestAggressiveAction();
+    const laaIndex = GameState.actions[GameState.street].indexOf(laa);
 
     if (amountToCall > GameState.players[playerIndex].stack) {
       action.amount = GameState.players[playerIndex].stack;
@@ -208,10 +206,23 @@ io.on('connection', function(client) {
         sidePotsThisStreet.findIndex(sp => sp.effectiveStack === sumContributions);
 
       if (existingEquivalentSidePotIndex === -1) {
+        let amount = sumContributions * 2;
+        const playerIndexesInvolved = [playerIndex, laa.playerIndex];
+
+        // Check for previous calls of latest aggressive action to include in side pot.
+        let currentAction;
+        for (let i = laaIndex + 1; i < GameState.actions[GameState.street].length; i++) {
+          currentAction = GameState.actions[GameState.street][i];
+          if (currentAction.type === ActionType.CALL) {
+            amount += sumContributions;
+            playerIndexesInvolved.push(currentAction.playerIndex);
+          }
+        }
+
         const sidePot = {
-          amount: sumContributions * 2,
+          amount,
+          playerIndexesInvolved,
           effectiveStack: sumContributions,
-          playerIndexesInvolved: [playerIndex, laa.playerIndex],
           streetCreated: GameState.street
         };
 
@@ -221,22 +232,18 @@ io.on('connection', function(client) {
         for (const sp of sidePotsThisStreet) {
           if (sp.effectiveStack > sumContributions) {
             for (const index of sp.playerIndexesInvolved) {
-              if (index !== playerIndex && index !== laa.playerIndex) {
+              if (!sidePot.playerIndexesInvolved.includes(index)) {
                 sp.amount -= sumContributions;
-                sidePot.amount += sumContributions
-
-                if (!sidePot.playerIndexesInvolved.includes(index)) {
-                  sidePot.playerIndexesInvolved.push(index);
-                }
+                sidePot.amount += sumContributions;
+                sidePot.playerIndexesInvolved.push(index);
               }
             }
           } else {
-            sidePot.amount -= sp.effectiveStack * 2;
-
-            for (const index of sp.playerIndexesInvolved) {
-              if (index !== playerIndex && index !== laa.playerIndex) {
+            for (const index of sidePot.playerIndexesInvolved) {
+              if (!sp.playerIndexesInvolved.includes(index)) {
+                sidePot.amount -= sp.effectiveStack;
                 sp.amount += sp.effectiveStack;
-                sidePot.amount += (sumContributions - sp.effectiveStack);
+                sp.playerIndexesInvolved.push(index);
               }
             }
           }
@@ -247,12 +254,10 @@ io.on('connection', function(client) {
 
         io.emit('side-pot', GameState);
       } else {
-        /*
         const existingSidePot = GameState.sidePots[existingEquivalentSidePotIndex];
 
         existingSidePot.amount += sumContributions;
         existingSidePot.playerIndexesInvolved.push(playerIndex);
-        */
       }
     } else {
       action.amount = amountToCall;
@@ -289,7 +294,7 @@ io.on('connection', function(client) {
 
     incrementActionIndex();
 
-    if (laa.type === ActionType.BIG_BLIND) {
+    if (laa.type === ActionType.BIG_BLIND && GameState.actionIndex === GameState.bigBlindIndex) {
       io.emit('big-blind-option', GameState);
     } else if (shouldMoveToNextStreet(ActionType.CALL, laa.playerIndex)) {
       if (GameState.street === Street.RIVER) {
@@ -443,7 +448,14 @@ function shouldMoveToNextStreet(actionType, latestAggressorIndex) {
       if (GameState.actionIndex === GameState.bigBlindIndex) return true;
       else return false;
     } else {
-      if (GameState.actionIndex === GameState.dealerIndex) return true;
+      // Find closest index to dealer that hasn't folded.
+      let i = GameState.dealerIndex;
+      while (GameState.players[i].folded) {
+        i--;
+        if (i < 0) i = GameState.players.length - 1;
+      }
+
+      if (GameState.actionIndex === i) return true;
       else return false;
     }
   } else {
@@ -576,7 +588,13 @@ function showdownProc() {
     assert(GameState.pots[i].amount >= 0);
     assert(GameState.pots[i].playerIndexesInvolved.length >= 1)
 
-    winnerIndexes = calculateWinnerIndexes(GameState.pots[i].playerIndexesInvolved);
+    debugger;
+
+    winnerIndexes = calculateWinnerIndexes(
+      GameState.pots[i].playerIndexesInvolved,
+      GameState.hands,
+      GameState.board
+    );
     GameState.winnerIndexesPerPot.push(winnerIndexes);
 
     for (const index of winnerIndexes) {
@@ -585,6 +603,7 @@ function showdownProc() {
     }
   }
 
+  // TODO: Abstract this out into a logging function/file.
   let handHistoryString = `NEW HAND WITH ID ${handId}\n\n`
   for (let i = 0; i < GameState.players.length; i++) {
     handHistoryString += `Username: ${GameState.players[i].username}\n`
@@ -622,91 +641,4 @@ function showdownProc() {
   fs.appendFile('game-logs.txt', handHistoryString, function(err) {
     if (err) console.error(err);
   });
-}
-
-function calculateWinnerIndexes(playerIndexes) {
-  if (playerIndexes.length === 1) return [playerIndexes[0]];
-
-  const showdownHands = [];
-  const handRanks = [];
-  let combinedHand, possibleHands, tmp, currBestHandIndexes, currBestHandRank;
-
-  for (const index of playerIndexes) {
-    combinedHand = GameState.hands[index].concat(GameState.board);
-    combinedHand.sort((a, b) => a.value - b.value);
-
-    possibleHands = [];
-    tmp = Array(5).fill(null);
-
-    kSubsets(combinedHand, tmp, possibleHands);
-
-    currBestHandIndexes = [0];
-    currBestHandRank = getHandRank(possibleHands[0]);
-    let currHandRank;
-
-    // DEBUG:
-    assert(possibleHands.length === 21);
-
-    for (let i = 1; i < possibleHands.length; i++) {
-      currHandRank = getHandRank(possibleHands[i]);
-
-      if (currHandRank < currBestHandRank) {
-        currBestHandIndexes = [i];
-        currBestHandRank = currHandRank;
-      } else if (currHandRank > currBestHandRank) {
-        // Do nothing?
-      } else if (currHandRank === currBestHandRank) {
-        currBestHandIndexes.push(i);
-      } else {
-        assert(false);
-      }
-    }
-
-    let resolvedTiesBestHandIndex = currBestHandIndexes[0];
-    let cmpResult;
-    for (const index of currBestHandIndexes) {
-      cmpResult = resolveTie(
-        currBestHandRank,
-        possibleHands[resolvedTiesBestHandIndex],
-        possibleHands[index]
-      );
-
-      if (cmpResult === 2) resolvedTiesBestHandIndex = index;
-    }
-
-    showdownHands.push(possibleHands[resolvedTiesBestHandIndex]);
-    handRanks.push(currBestHandRank);
-  }
-
-  let currWinningHandIndexes = [0];
-  let currWinningHandRank = handRanks[0];
-  let cmpResult;
-  for (let i = 1; i < showdownHands.length; i++) {
-    if (handRanks[i] < currWinningHandRank) {
-      currWinningHandIndexes = [i];
-      currWinningHandRank = handRanks[i];
-    } else if (handRanks[i] > currWinningHandRank) {
-      // Do nothing?
-    } else if (handRanks[i] === currWinningHandRank) {
-      cmpResult = resolveTie(
-        handRanks[i],
-        showdownHands[i],
-        showdownHands[currWinningHandIndexes[0]]
-      );
-
-      if (cmpResult === 1) {
-        currWinningHandIndexes = [i];
-      } else if (cmpResult === 2) {
-        // Do nothing.
-      } else if (cmpResult === 0) {
-        currWinningHandIndexes.push(i);
-      } else {
-        console.error(
-          'Unexpected value of cmpResult. Expected 0, 1, or 2; got ' + cmpResult + '.'
-        );
-      }
-    }
-  }
-
-  return currWinningHandIndexes;
 }

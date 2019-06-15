@@ -232,7 +232,18 @@ socket.on('next-street', function(_GameState, isAllIn) {
 });
 
 socket.on('side-pot', function(_GameState) {
-  console.log('Does this get emitted?');
+  GameState = _GameState;
+  var newSidePot = GameState.pots[GameState.pots.length - 1];
+
+  createElementIfNotExist('sidePots', 'div', { className: 'side-pots' });
+  elements.sidePots.appendChild(makeElement('p', {
+    className: 'side-pot-item',
+    textContent: 'Side pot ' + (GameState.pots.length - 1) + ': ' + newSidePot.amount
+  }));
+
+  if (!elements.game.contains(elements.sidePots)) {
+    elements.game.insertBefore(elements.sidePots, elements.hand);
+  }
 });
 
 socket.on('resolve-effective-stacks', function(_GameState) {
@@ -337,6 +348,8 @@ function renderGame() {
   } else {
     renderHand();
     renderPot();
+    if (GameState.pots.length > 1) renderSidePots();
+
     if (GameState.board.length > 0) renderBoard();
 
     if (GameState.status === Status.HAND) {
@@ -462,13 +475,29 @@ function updateBetText() {
 }
 
 function renderPot() {
-  // TODO: Make this support side pots.
   elements.pot = makeElement('div', { className: 'pot' });
   elements.pot.appendChild(makeElement('h2', {
     textContent: 'Pot: ' + GameState.pots[0].amount
   }));
 
   elements.game.prepend(elements.pot);
+}
+
+function renderSidePots() {
+  elements.sidePots = makeElement('div', { className: 'side-pots' });
+
+  for (var i = 1; i < GameState.pots.length; i++) {
+    elements.sidePots.appendChild(makeElement('p', {
+      className: 'side-pot-item',
+      textContent: 'Side pot ' + i + ': ' + GameState.pots[i].amount
+    }));
+  }
+
+  elements.game.insertBefore(elements.sidePots, elements.hand);
+}
+
+function updateSidePots() {
+  /* TODO */
 }
 
 function updatePot() {
