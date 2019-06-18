@@ -183,8 +183,7 @@ io.on('connection', function(client) {
     const action = { playerIndex, type: ActionType.CALL };
 
     let sumContributions = sumContributionsOfPlayerThisStreet(playerIndex);
-    const laa = getLatestAggressiveAction();
-    const laaIndex = GameState.actions[GameState.street].indexOf(laa);
+    const laaIndex = getIndexOfLatestAggressiveAction();
 
     if (amountToCall > GameState.players[playerIndex].stack) {
       action.amount = GameState.players[playerIndex].stack;
@@ -207,7 +206,7 @@ io.on('connection', function(client) {
 
       if (existingEquivalentSidePotIndex === -1) {
         let amount = sumContributions * 2;
-        const playerIndexesInvolved = [playerIndex, laa.playerIndex];
+        const playerIndexesInvolved = [playerIndex, actions[laaIndex].playerIndex];
 
         // Check for previous calls of latest aggressive action to include in side pot.
         let currentAction;
@@ -269,39 +268,37 @@ io.on('connection', function(client) {
 
     actions.push(action);
 
-    // TODO: Factor this into a "shouldDoAllInRunout" function.
-    let numPlayersNotAllIn = 0;
-    let remainingPlayer;
-    for (const player of GameState.players) {
-      if (player.folded) continue;
-      if (player.stack > 0) numPlayersNotAllIn++;
-      if (numPlayersNotAllIn > 1) break;
-    }
-
-    if (numPlayersNotAllIn <= 1) {
-      // Resolve effective stack
-      const sumContributionsLaa = sumContributionsOfPlayerThisStreet(laa.playerIndex);
-      if (sumContributionsLaa > sumContributions) {
-        assert(GameState.pots.some(sp => sp.streetCreated === GameState.street));
-
-        GameState.players[laa.playerIndex].stack += GameState.pots[0].amount;
-        GameState.pots[0].amount = 0;
-      }
-
-      io.emit('all-in-runout', GameState);
-      return allInRunoutProc();
-    }
-
     incrementActionIndex();
 
-    if (laa.type === ActionType.BIG_BLIND && GameState.actionIndex === GameState.bigBlindIndex) {
+    if (actions[laaIndex].type === ActionType.BIG_BLIND && GameState.actionIndex === GameState.bigBlindIndex) {
       io.emit('big-blind-option', GameState);
-    } else if (shouldMoveToNextStreet(ActionType.CALL, laa.playerIndex)) {
-      if (GameState.street === Street.RIVER) {
-        showdownProc();
+    } else if (GameState.actionIndex === actions[laaIndex].playerIndex) {
+      let numPlayersNotAllIn = 0;
+      for (const player of GameState.players) {
+        if (player.folded) continue;
+        if (player.stack > 0) numPlayersNotAllIn++;
+        if (numPlayersNotAllIn > 1) break;
+      }
+
+      if (numPlayersNotAllIn <= 1) {
+        // Resolve effective stack
+        const sumContributionsLastAggressor = sumContributionsOfPlayerThisStreet(actions[laaIndex].playerIndex);
+        if (sumContributionsLastAggressor > sumContributions) {
+          assert(GameState.pots.some(sp => sp.streetCreated === GameState.street));
+
+          GameState.players[actions[laaIndex].playerIndex].stack += GameState.pots[0].amount;
+          GameState.pots[0].amount = 0;
+        }
+
+        io.emit('all-in-runout', GameState);
+        allInRunoutProc();
       } else {
-        moveToNextStreet();
-        io.emit('next-street', GameState);
+        if (GameState.street === Street.RIVER) {
+          showdownProc();
+        } else {
+          moveToNextStreet();
+          io.emit('next-street', GameState);
+        }
       }
     } else {
       io.emit('call', GameState);
@@ -313,11 +310,12 @@ io.on('connection', function(client) {
     GameState.pots[0].amount += amount;
 
     // Special case for big blind option.
-    const laa = getLatestAggressiveAction();
+    const actions = GameState.actions[GameState.street];
+    const laaIndex = getIndexOfLatestAggressiveAction();
     if (GameState.street === Street.PRE_FLOP
       && playerIndex === GameState.bigBlindIndex
-      && laa.playerIndex === playerIndex
-      && laa.type === ActionType.BIG_BLIND
+      && actions[laaIndex].playerIndex === playerIndex
+      && actions[laaIndex].type === ActionType.BIG_BLIND
     ) {
       GameState.currentBetTotal = amount + BIG_BLIND;
     } else {
@@ -362,13 +360,15 @@ io.on('connection', function(client) {
       if (involvedIndex !== -1) pot.playerIndexesInvolved.splice(involvedIndex, 1);
     }
 
-    const laa = getLatestAggressiveAction();
+    const laaIndex = getIndexOfLatestAggressiveAction();
+    const actions = GameState.actions[GameState.street];
+
     let numActivePlayers = 0;
     let player;
     for (let i = 0; i < GameState.players.length; i++) {
       player = GameState.players[i];
 
-      if (!player.folded && (player.stack > 0 || i === laa.playerIndex)) numActivePlayers++;
+      if (!player.folded && (player.stack > 0 || i === actions[laaIndex].playerIndex)) numActivePlayers++;
     }
 
     if (numActivePlayers === 1) {
@@ -396,10 +396,11 @@ io.on('connection', function(client) {
     } else {
       incrementActionIndex();
 
-      const laa = getLatestAggressiveAction();
-      if (GameState.actionIndex === GameState.bigBlindIndex && laa.type === ActionType.BIG_BLIND) {
+      const laaIndex = getIndexOfLatestAggressiveAction();
+      const actions = GameState.actions[GameState.street];
+      if (GameState.actionIndex === GameState.bigBlindIndex && actions[laaIndex].type === ActionType.BIG_BLIND) {
         io.emit('big-blind-option', GameState);
-      } else if (shouldMoveToNextStreet(ActionType.FOLD, laa.playerIndex)) {
+      } else if (GameState.actionIndex === actions[laaIndex].playerIndex) {
         if (GameState.street === Street.RIVER) {
           showdownProc();
         } else {
@@ -437,7 +438,7 @@ server.listen(8080, function() {
 function incrementActionIndex() {
   GameState.actionIndex = (GameState.actionIndex + 1) % GameState.players.length;
 
-  while (GameState.players[GameState.actionIndex].folded) {
+  while (GameState.players[GameState.actionIndex].folded || (!GameState.hands[GameState.actionIndex])) {
     GameState.actionIndex = (GameState.actionIndex + 1) % GameState.players.length;
   }
 }
@@ -493,15 +494,14 @@ function moveToNextStreet() {
   GameState.currentBetTotal = 0;
 }
 
-function getLatestAggressiveAction() {
-  let action;
-  for (const a of GameState.actions[GameState.street]) {
-    if (a.amount && a.type !== ActionType.CALL) {
-      action = a;
+function getIndexOfLatestAggressiveAction() {
+  const actions = GameState.actions[GameState.street];
+  const aggressiveTypes = [ActionType.BET, ActionType.RAISE, ActionType.BIG_BLIND];
+  for (let i = actions.length - 1; i >= 0; i--) {
+    if (aggressiveTypes.includes(actions[i].type)) {
+      return i;
     }
   }
-
-  return action;
 }
 
 function resetHandState() {
@@ -586,9 +586,7 @@ function showdownProc() {
   let winnerIndexes;
   for (let i = 0; i < GameState.pots.length; i++) {
     assert(GameState.pots[i].amount >= 0);
-    assert(GameState.pots[i].playerIndexesInvolved.length >= 1)
-
-    debugger;
+    assert(GameState.pots[i].playerIndexesInvolved.length >= 1);
 
     winnerIndexes = calculateWinnerIndexes(
       GameState.pots[i].playerIndexesInvolved,
@@ -606,8 +604,10 @@ function showdownProc() {
   // TODO: Abstract this out into a logging function/file.
   let handHistoryString = `NEW HAND WITH ID ${handId}\n\n`
   for (let i = 0; i < GameState.players.length; i++) {
-    handHistoryString += `Username: ${GameState.players[i].username}\n`
-      + `Hand: ${GameState.hands[i].reduce((acc, c) => acc + `${c.value}${c.suit}`, '')}\n\n`;
+    if (GameState.hands[i]) {
+      handHistoryString += `Username: ${GameState.players[i].username}\n`
+        + `Hand: ${GameState.hands[i].reduce((acc, c) => acc + `${c.value}${c.suit}`, '')}\n\n`;
+    }
   }
 
   handHistoryString += 'Board: ';

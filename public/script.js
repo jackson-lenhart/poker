@@ -151,7 +151,12 @@ socket.on('call', function(_GameState) {
       renderBetForm();
     } else {
       const amountToCall = calculateAmountToCall();
-      renderRaiseForm(amountToCall);
+
+      if (amountToCall >= GameState.players[playerIndex].stack) {
+        renderAllInToCallForm(amountToCall);
+      } else {
+        renderRaiseForm(amountToCall);
+      }
     }
   }
 });
@@ -305,10 +310,9 @@ function renderGame() {
 
   appendChildren(elements.game, [elements.player, elements.stack]);
 
-  // TODO: Clean this up
   if (GameState.status === Status.LOBBY) {
     if (GameState.players.length >= 2) {
-      // Only allowing play if stack is at least the big-blind (will fix this later)
+      // TODO: Allow play if stack is between 0 and big blind.
       if (GameState.players[playerIndex].stack >= 100) {
         // Another if statement here so that ready waiting text
         // shows if player has already signified readiness.
@@ -329,6 +333,7 @@ function renderGame() {
         }
       }
     } else {
+      // Only 1 player has joined.
       createElementIfNotExist('waiting', 'p', {
         textContent: 'Waiting for others to join...'
       });
@@ -346,68 +351,77 @@ function renderGame() {
       elements.game.appendChild(elements.topOffButton);
     }
   } else {
-    renderHand();
-    renderPot();
-    if (GameState.pots.length > 1) renderSidePots();
-
-    if (GameState.board.length > 0) renderBoard();
-
-    if (GameState.status === Status.HAND) {
+    if (GameState.hands[playerIndex]) {
+      // Current client is involved in the current hand.
+      renderHand();
+      renderPot();
+      if (GameState.pots.length > 1) renderSidePots();
+      if (GameState.board.length > 0) renderBoard();
       renderPlayersBar();
 
-      if (GameState.actionIndex === playerIndex) {
-        // Check if 1 or fewer players are left without their chips all-in
-        var numPlayersNotAllIn = 0;
-        for (var i = 0; i < GameState.players.length; i++) {
-          if (GameState.players[i].stack > 0) numPlayersNotAllIn++;
-        }
-
-        // HACK: This condition will only work if playing heads-up.
-        // Temporary hack until side-pots are implemented.
-        var actions = GameState.actions[GameState.street];
-        var len = actions.length;
-
-        if (numPlayersNotAllIn <= 1) {
-          if (len && actions[len - 1].type !== ActionType.CALL) {
-            const amountToCall = calculateAmountToCall();
-
-            renderAllInToCallForm(amountToCall);
-          }
+      if (GameState.status === Status.HAND) {
+        if (GameState.allInRunout) {
+          // Do nothing.
         } else {
-          if (!len || actions.every(a => a.type === ActionType.CHECK) || isBigBlindOption()) {
-            renderBetForm();
-          } else {
-            const amountToCall = calculateAmountToCall();
+          if (GameState.actionIndex === playerIndex) {
+            var actions = GameState.actions[GameState.street];
 
-            if (amountToCall === GameState.players[playerIndex].stack) {
-              renderAllInToCallForm(amountToCall);
-            } else if (amountToCall > GameState.players[playerIndex].stack) {
-              // DEBUG:
-              throw new Error(
-                'Unexpected amount to call: ' + amountToCall + '.'
-                + ' Greater than current player\'s stack: ' + GameState.players[playerIndex].stack
-              );
+            if (!actions.length || actions.every(a => a.type === ActionType.CHECK) || isBigBlindOption()) {
+              renderBetForm();
             } else {
-              renderRaiseForm(amountToCall);
+              const amountToCall = calculateAmountToCall();
+
+              if (amountToCall >= GameState.players[playerIndex].stack) {
+                renderAllInToCallForm(amountToCall);
+              } else {
+                // NOTE: If the action is on this player he/she will always have a non-zero stack.
+                var onlyPlayerWithNonZeroStack = true;
+                for (var i = 0; i < GameState.players.length; i++) {
+                  if (i === playerIndex) continue;
+
+                  if (GameState.players[i].stack > 0) {
+                    otherPlayerWithNonZeroStack = false;
+                    break;
+                  }
+                }
+
+                // This is only for the cases where amountToCall is less than player's stack but the rest
+                // of the players' stacks are all in.
+                if (onlyPlayerWithNonZeroStack) {
+                  renderAllInToCallForm(amountToCall);
+                } else {
+                  renderRaiseForm(amountToCall);
+                }
+              }
             }
           }
         }
-      }
-    } else if (GameState.status === Status.FINISHED) {
-      if (!elements.hasOwnProperty('handOver')) {
-        elements.handOver = makeElement('p');
-      }
+      } else if (GameState.status === Status.FINISHED) {
+        if (!elements.hasOwnProperty('handOver')) {
+          elements.handOver = makeElement('p');
+        }
 
-      // TODO: Implement side pots here.
-      if (GameState.winnerIndexesPerPot[0].length === 1) {
-        elements.handOver.textContent = 'Hand finished. '
-          + GameState.players[GameState.winnerIndexesPerPot[0][0]].username
-          + ' wins ' + GameState.pots[0].amount + '.';
+        // TODO: Implement side pots here.
+        if (GameState.winnerIndexesPerPot[0].length === 1) {
+          elements.handOver.textContent = 'Hand finished. '
+            + GameState.players[GameState.winnerIndexesPerPot[0][0]].username
+            + ' wins ' + GameState.pots[0].amount + '.';
+        } else {
+          elements.handOver.textContent = 'Split pot.';
+        }
+
+        elements.game.prepend(elements.handOver);
       } else {
-        elements.handOver.textContent = 'Split pot.';
+        throw new Error('Unexpected status ' + GameState.status + '.');
       }
+    } else {
+      elements.sittingOut = makeElement('p');
 
-      elements.game.prepend(elements.handOver);
+      elements.sittingOut.textContent =
+        'Sitting out. ' +
+        'You will be able to join once the current hand is finished.';
+
+      elements.game.appendChild(elements.sittingOut);
     }
   }
 
@@ -465,13 +479,6 @@ function updatePlayersBar() {
         GameState.players[i].username + ': ' + GameState.players[i].stack;
     }
   }
-}
-
-function updateBetText() {
-  var betTotal = GameState.currentBetTotal;
-  var amountToCall = calculateAmountToCall();
-
-  betText.textContent = 'Bet is ' + betTotal + ', ' + amountToCall + ' to call.';
 }
 
 function renderPot() {
@@ -571,8 +578,12 @@ function renderAllInToCallForm(amountToCall) {
     amountToCall = calculateAmountToCall();
   }
 
+  if (amountToCall > GameState.players[playerIndex].stack) {
+    amountToCall = GameState.players[playerIndex].stack;
+  }
+
   createElementIfNotExist('allInText', 'p', {});
-  elements.allInText.textContent = 'Call all in for ' + GameState.players[playerIndex].stack + '?';
+  elements.allInText.textContent = 'Call all in for ' + amountToCall + '?';
 
   createElementIfNotExist('callButton', 'button', {
     type: 'button',
